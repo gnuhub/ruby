@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>IDESourceControlProjectFavoriteDictionaryKey</key>
+	<false/>
+	<key>IDESourceControlProjectIdentifier</key>
+	<string>7CBC7A6A-0EEF-4F44-A752-1A278869186E</string>
+	<key>IDESourceControlProjectName</key>
+	<string>xcode-ruby</string>
+	<key>IDESourceControlProjectOriginsDictionary</key>
+	<dict>
+		<key>453A7546363B689A1196790BE6668B76AA63C326</key>
+		<string>github.com:gnuhub/ruby.git</string>
+	</dict>
+	<key>IDESourceControlProjectPath</key>
+	<string>xcode-ruby/xcode-ruby.xcodeproj</string>
+	<key>IDESourceControlProjectRelativeInstallPathDictionary</key>
+	<dict>
+		<key>453A7546363B689A1196790BE6668B76AA63C326</key>
+		<string>../../..</string>
+	</dict>
+	<key>IDESourceControlProjectURL</key>
+	<string>github.com:gnuhub/ruby.git</string>
+	<key>IDESourceControlProjectVersion</key>
+	<integer>111</integer>
+	<key>IDESourceControlProjectWCCIdentifier</key>
+	<string>453A7546363B689A1196790BE6668B76AA63C326</string>
+	<key>IDESourceControlProjectWCConfigurations</key>
+	<array>
+		<dict>
+			<key>IDESourceControlRepositoryExtensionIdentifierKey</key>
+			<string>public.vcs.git</string>
+			<key>IDESourceControlWCCIdentifierKey</key>
+			<string>453A7546363B689A1196790BE6668B76AA63C326</string>
+			<key>IDESourceControlWCCName</key>
+			<string>ruby</string>
+		</dict>
+	</array>
+</dict>
+</plist>
