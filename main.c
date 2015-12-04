@@ -30,6 +30,13 @@ main(int argc, char **argv)
 #endif
 
     ruby_sysinit(&argc, &argv);
+    /* ｛｝里的代码一定会被执行，但这里面的代码可以局部变量
+     * 局部变量过了后面的 } 后，就没用了
+     其实效果就是
+     if (1)
+     {
+     }
+     */
     {
 	RUBY_INIT_STACK;
 	ruby_init();
