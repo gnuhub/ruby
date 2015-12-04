@@ -119,6 +119,43 @@ class TestSymbol < Test::Unit::TestCase
     end
   end
 
+  def test_to_proc_yield
+    assert_ruby_status([], <<-"end;", timeout: 5.0)
+      GC.stress = true
+      true.tap(&:itself)
+    end;
+  end
+
+  def test_to_proc_new_proc
+    assert_ruby_status([], <<-"end;", timeout: 5.0)
+      GC.stress = true
+      2.times {Proc.new(&:itself)}
+    end;
+  end
+
+  def test_to_proc_no_method
+    assert_separately([], <<-"end;", timeout: 5.0)
+      bug11566 = '[ruby-core:70980] [Bug #11566]'
+      assert_raise(NoMethodError, bug11566) {Proc.new(&:foo).(1)}
+      assert_raise(NoMethodError, bug11566) {:foo.to_proc.(1)}
+    end;
+  end
+
+  def test_to_proc_arg
+    assert_separately([], <<-"end;", timeout: 5.0)
+      def (obj = Object.new).proc(&b) b; end
+      assert_same(:itself.to_proc, obj.proc(&:itself))
+    end;
+  end
+
+  def test_to_proc_call_with_symbol_proc
+    first = 1
+    bug11594 = "[ruby-core:71088] [Bug #11594] corrupted the first local variable"
+    # symbol which does not have a Proc
+    ->(&blk) {}.call(&:test_to_proc_call_with_symbol_proc)
+    assert_equal(1, first, bug11594)
+  end
+
   def test_call
     o = Object.new
     def o.foo(x, y); x + y; end
@@ -276,8 +313,8 @@ class TestSymbol < Test::Unit::TestCase
   def test_symbol_fstr_leak
     bug10686 = '[ruby-core:67268] [Bug #10686]'
     x = 0
-    assert_no_memory_leak([], '', <<-"end;", bug10686, limit: 1.71)
-      200_000.times { |i| i.to_s.to_sym }
+    assert_no_memory_leak([], '200_000.times { |i| i.to_s.to_sym }; GC.start', <<-"end;", bug10686, limit: 1.71, rss: true)
+      200_000.times { |i| (i + 200_000).to_s.to_sym }
     end;
   end
 
@@ -298,5 +335,13 @@ class TestSymbol < Test::Unit::TestCase
         h['bar'.to_sym] = 2
       }
     end;
+  end
+
+  def test_not_freeze
+    bug11721 = '[ruby-core:71611] [Bug #11721]'
+    str = "\u{1f363}".taint
+    assert_not_predicate(str, :frozen?)
+    assert_equal str, str.to_sym.to_s
+    assert_not_predicate(str, :frozen?, bug11721)
   end
 end

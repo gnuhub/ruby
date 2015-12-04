@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -111,7 +110,7 @@ dsa_generate(int size)
     unsigned long h;
 
     if (!dsa) return 0;
-    if (!RAND_bytes(seed, seed_len)) {
+    if (RAND_bytes(seed, seed_len) <= 0) {
 	DSA_free(dsa);
 	return 0;
     }
@@ -145,7 +144,7 @@ dsa_generate(int size)
     int seed_len = 20, counter;
     unsigned long h;
 
-    if (!RAND_bytes(seed, seed_len)) {
+    if (RAND_bytes(seed, seed_len) <= 0) {
 	return 0;
     }
     dsa = DSA_generate_parameters(size, seed, seed_len, &counter, &h,

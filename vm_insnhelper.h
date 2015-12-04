@@ -12,28 +12,6 @@
 #ifndef RUBY_INSNHELPER_H
 #define RUBY_INSNHELPER_H
 
-/**
- * VM Debug Level
- *
- * debug level:
- *  0: no debug output
- *  1: show instruction name
- *  2: show stack frame when control stack frame is changed
- *  3: show stack status
- *  4: show register
- *  5:
- * 10: gc check
- */
-
-#ifndef VMDEBUG
-#define VMDEBUG 0
-#endif
-
-#if 0
-#undef  VMDEBUG
-#define VMDEBUG 3
-#endif
-
 extern VALUE ruby_vm_const_missing_count;
 
 #if VM_COLLECT_USAGE_DETAILS
@@ -101,8 +79,6 @@ enum vm_regan_acttype {
 #define GET_CURRENT_INSN() (*GET_PC())
 #define GET_OPERAND(n)     (GET_PC()[(n)])
 #define ADD_PC(n)          (SET_PC(REG_PC + (n)))
-
-#define GET_PC_COUNT()     (REG_PC - GET_ISEQ()->iseq_encoded)
 #define JUMP(dst)          (REG_PC += (dst))
 
 /* frame pointer, environment pointer */
@@ -145,27 +121,8 @@ enum vm_regan_acttype {
 /* deal with control flow 2: method/iterator              */
 /**********************************************************/
 
-#define COPY_CREF_OMOD(c1, c2) do {  \
-  CREF_REFINEMENTS_SET(c1, CREF_REFINEMENTS(c2)); \
-  if (!NIL_P(CREF_REFINEMENTS(c2))) { \
-      CREF_OMOD_SHARED_SET(c1); \
-      CREF_OMOD_SHARED_SET(c2); \
-  } \
-} while (0)
-
-#define COPY_CREF(c1, c2) do {  \
-  rb_cref_t *__tmp_c2 = (c2); \
-  COPY_CREF_OMOD((c1), __tmp_c2); \
-  CREF_CLASS_SET((c1), CREF_CLASS(__tmp_c2));\
-  CREF_SCOPE_VISI_COPY((c1), __tmp_c2);\
-  CREF_NEXT_SET((c1), CREF_NEXT(__tmp_c2));\
-  if (CREF_PUSHED_BY_EVAL(__tmp_c2)) { \
-      CREF_PUSHED_BY_EVAL_SET(c1); \
-  } \
-} while (0)
-
-#define CALL_METHOD(ci) do { \
-    VALUE v = (*(ci)->call)(th, GET_CFP(), (ci)); \
+#define CALL_METHOD(calling, ci, cc) do { \
+    VALUE v = (*(cc)->call)(th, GET_CFP(), (calling), (ci), (cc)); \
     if (v == Qundef) { \
 	RESTORE_REGS(); \
 	NEXT_INSN(); \
@@ -184,8 +141,8 @@ enum vm_regan_acttype {
 #endif
 
 #if OPT_CALL_FASTPATH
-#define CI_SET_FASTPATH(ci, func, enabled) do { \
-    if (LIKELY(enabled)) ((ci)->call = (func)); \
+#define CI_SET_FASTPATH(cc, func, enabled) do { \
+    if (LIKELY(enabled)) ((cc)->call = (func)); \
 } while (0)
 #else
 #define CI_SET_FASTPATH(ci, func, enabled) /* do nothing */
@@ -215,9 +172,11 @@ enum vm_regan_acttype {
 #endif
 
 #define CALL_SIMPLE_METHOD(recv_) do { \
-    ci->blockptr = 0; ci->argc = ci->orig_argc; \
-    vm_search_method(ci, ci->recv = (recv_)); \
-    CALL_METHOD(ci); \
+    struct rb_calling_info calling; \
+    calling.blockptr = NULL; \
+    calling.argc = ci->orig_argc; \
+    vm_search_method(ci, cc, calling.recv = (recv_)); \
+    CALL_METHOD(&calling, ci, cc); \
 } while (0)
 
 #define NEXT_CLASS_SERIAL() (++ruby_vm_class_serial)

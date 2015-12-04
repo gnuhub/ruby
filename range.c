@@ -23,6 +23,7 @@ static ID id_beg, id_end, id_excl, id_integer_p, id_div;
 #define id_succ idSucc
 
 static VALUE r_cover_p(VALUE, VALUE, VALUE, VALUE);
+static VALUE range_include(VALUE range, VALUE val);
 
 #define RANGE_BEG(r) (RSTRUCT(r)->as.ary[0])
 #define RANGE_END(r) (RSTRUCT(r)->as.ary[1])
@@ -82,7 +83,7 @@ range_modify(VALUE range)
 {
     /* Ranges are immutable, so that they should be initialized only once. */
     if (RANGE_EXCL(range) != Qnil) {
-	rb_name_error(idInitialize, "`initialize' called twice");
+	rb_name_err_raise("`initialize' called twice", range, ID2SYM(idInitialize));
     }
 }
 
@@ -1073,7 +1074,7 @@ range_to_s(VALUE range)
     str = rb_str_dup(str);
     rb_str_cat(str, "...", EXCL(range) ? 3 : 2);
     rb_str_append(str, str2);
-    OBJ_INFECT(str, str2);
+    OBJ_INFECT(str, range);
 
     return str;
 }
@@ -1091,7 +1092,7 @@ inspect_range(VALUE range, VALUE dummy, int recur)
     str = rb_str_dup(str);
     rb_str_cat(str, "...", EXCL(range) ? 3 : 2);
     rb_str_append(str, str2);
-    OBJ_INFECT(str, str2);
+    OBJ_INFECT(str, range);
 
     return str;
 }
@@ -1134,7 +1135,12 @@ range_inspect(VALUE range)
 static VALUE
 range_eqq(VALUE range, VALUE val)
 {
-    return rb_funcall(range, rb_intern("include?"), 1, val);
+    ID pred;
+    CONST_ID(pred, "include?");
+    if (rb_method_basic_definition_p(RBASIC_CLASS(range), pred)) {
+	return range_include(range, val);
+    }
+    return rb_funcall(range, pred, 1, val);
 }
 
 

@@ -5,6 +5,7 @@
   which is written in ruby.
 */
 
+#include "ruby/config.h"
 #if defined _MSC_VER
 /* Microsoft Visual C does not define M_PI and others by default */
 # define _USE_MATH_DEFINES 1
@@ -1019,8 +1020,8 @@ nucomp_coerce(VALUE self, VALUE other)
     if (RB_TYPE_P(other, T_COMPLEX))
 	return rb_assoc_new(other, self);
 
-    rb_raise(rb_eTypeError, "%s can't be coerced into %s",
-	     rb_obj_classname(other), rb_obj_classname(self));
+    rb_raise(rb_eTypeError, "%"PRIsVALUE" can't be coerced into %"PRIsVALUE,
+	     rb_obj_class(other), rb_obj_class(self));
     return Qnil;
 }
 

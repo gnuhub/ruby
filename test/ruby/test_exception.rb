@@ -302,6 +302,10 @@ class TestException < Test::Unit::TestCase
     assert_raise_with_message(TypeError, /C\u{4032}/) do
       [*o]
     end
+    obj = eval("class C\u{1f5ff}; self; end").new
+    assert_raise_with_message(TypeError, /C\u{1f5ff}/) do
+      Class.new {include obj}
+    end
   end
 
   def test_errat
@@ -425,9 +429,11 @@ end.join
     bug3237 = '[ruby-core:29948]'
     str = "\u2600"
     id = :"\u2604"
-    msg = "undefined method `#{id}' for #{str.inspect}:String"
-    assert_raise_with_message(NoMethodError, msg, bug3237) do
-      str.__send__(id)
+    EnvUtil.with_default_external(Encoding::UTF_8) do
+      msg = "undefined method `#{id}' for #{str.inspect}:String"
+      assert_raise_with_message(NoMethodError, msg, bug3237) do
+        str.__send__(id)
+      end
     end
   end
 
@@ -668,6 +674,10 @@ end.join
     }
     assert_equal(:Object, e.name)
     e = assert_raise(NameError) {
+      BasicObject::X
+    }
+    assert_same(BasicObject, e.receiver)
+    e = assert_raise(NameError) {
       obj.instance_eval {foo}
     }
     assert_equal(:foo, e.name)
@@ -710,5 +720,13 @@ $stderr = $stdout; raise "\x82\xa0"') do |outs, errs, status|
     a = Class.new {def method_missing(*) super end}.new
     assert_raise(NameError) {a.instance_eval("foo")}
     assert_raise(NoMethodError, bug10969) {a.public_send("bar", true)}
+  end
+
+  def test_message_of_name_error
+    assert_raise_with_message(NameError, /\Aundefined method `foo' for module `#<Module:.*>'$/) do
+      Module.new do
+        module_function :foo
+      end
+    end
   end
 end

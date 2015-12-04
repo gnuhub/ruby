@@ -232,10 +232,24 @@ class TestObject < Test::Unit::TestCase
   end
 
   def test_remove_instance_variable
-    o = Object.new
-    o.instance_eval { @foo = :foo }
-    o.remove_instance_variable(:@foo)
-    assert_equal(false, o.instance_variable_defined?(:@foo))
+    { 'T_OBJECT' => Object.new,
+      'T_CLASS,T_MODULE' => Class.new(Object),
+      'generic ivar' => '',
+    }.each do |desc, o|
+      e = assert_raise(NameError, "#{desc} iv removal raises before set") do
+        o.remove_instance_variable(:@foo)
+      end
+      assert_equal([o, :@foo], [e.receiver, e.name])
+      o.instance_eval { @foo = :foo }
+      assert_equal(:foo, o.remove_instance_variable(:@foo),
+                   "#{desc} iv removal returns original value")
+      assert_not_send([o, :instance_variable_defined?, :@foo],
+                      "#{desc} iv removed successfully")
+      e = assert_raise(NameError, "#{desc} iv removal raises after removal") do
+        o.remove_instance_variable(:@foo)
+      end
+      assert_equal([o, :@foo], [e.receiver, e.name])
+    end
   end
 
   def test_convert_string
@@ -372,15 +386,19 @@ class TestObject < Test::Unit::TestCase
 
     m = "\u{30e1 30bd 30c3 30c9}"
     c = Class.new
-    assert_raise_with_message(NameError, /#{m}/) do
-      c.class_eval {remove_method m}
+    EnvUtil.with_default_external(Encoding::UTF_8) do
+      assert_raise_with_message(NameError, /#{m}/) do
+        c.class_eval {remove_method m}
+      end
     end
     c = Class.new {
       define_method(m) {}
       remove_method(m)
     }
-    assert_raise_with_message(NameError, /#{m}/) do
-      c.class_eval {remove_method m}
+    EnvUtil.with_default_external(Encoding::UTF_8) do
+      assert_raise_with_message(NameError, /#{m}/) do
+        c.class_eval {remove_method m}
+      end
     end
   end
 

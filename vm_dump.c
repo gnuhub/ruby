@@ -98,6 +98,12 @@ control_frame_dump(rb_thread_t *th, rb_control_frame_t *cfp)
 	if (RUBY_VM_IFUNC_P(cfp->iseq)) {
 	    iseq_name = "<ifunc>";
 	}
+	else if (SYMBOL_P(cfp->iseq)) {
+	    tmp = rb_sym2str((VALUE)cfp->iseq);
+	    iseq_name = RSTRING_PTR(tmp);
+	    snprintf(posbuf, MAX_POSBUF, ":%s", iseq_name);
+	    line = -1;
+	}
 	else {
 	    pc = cfp->pc - cfp->iseq->body->iseq_encoded;
 	    iseq_name = RSTRING_PTR(cfp->iseq->body->location.label);
@@ -251,24 +257,11 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
     VALUE *ep = cfp->ep;
 
     int argc = 0, local_size = 0;
-    const char *name;
     rb_iseq_t *iseq = cfp->iseq;
 
-    if (iseq == 0) {
-	if (RUBYVM_CFUNC_FRAME_P(cfp)) {
-	    name = rb_id2name(cfp->me->called_id);
-	}
-	else {
-	    name = "?";
-	}
-    }
-    else if (RUBY_VM_IFUNC_P(iseq)) {
-	name = "<ifunc>";
-    }
-    else {
+    if (RUBY_VM_NORMAL_ISEQ_P(iseq)) {
 	argc = iseq->body->param.lead_num;
 	local_size = iseq->body->local_size;
-	name = RSTRING_PTR(iseq->body->location.label);
     }
 
     /* stack trace header */
@@ -283,7 +276,7 @@ vm_stack_dump_each(rb_thread_t *th, rb_control_frame_t *cfp)
 	VM_FRAME_TYPE(cfp) == VM_FRAME_MAGIC_IFUNC ||
 	VM_FRAME_TYPE(cfp) == VM_FRAME_MAGIC_EVAL  ||
 	VM_FRAME_TYPE(cfp) == VM_FRAME_MAGIC_RESCUE)
-      {
+    {
 
 	VALUE *ptr = ep - local_size;
 
@@ -438,7 +431,7 @@ rb_vmdebug_thread_dump_state(VALUE self)
 # ifdef HAVE_LIBUNWIND
 #  undef backtrace
 #  define backtrace unw_backtrace
-# elif defined(__APPLE__) && defined(__x86_64__)
+# elif defined(__APPLE__) && defined(__x86_64__) && defined(HAVE_LIBUNWIND_H)
 #  define UNW_LOCAL_ONLY
 #  include <libunwind.h>
 #  undef backtrace
@@ -693,7 +686,7 @@ rb_print_backtrace(void)
 #define MAX_NATIVE_TRACE 1024
     static void *trace[MAX_NATIVE_TRACE];
     int n = (int)backtrace(trace, MAX_NATIVE_TRACE);
-#if defined(USE_ELF) && defined(HAVE_DLADDR)
+#if defined(USE_ELF) && defined(HAVE_DLADDR) && !defined(__sparc)
     rb_dump_backtrace_with_lines(n, trace);
 #else
     char **syms = backtrace_symbols(trace, n);

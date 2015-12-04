@@ -171,7 +171,7 @@ remove_event_hook(rb_hook_list_t *list, rb_event_hook_func_t func, VALUE data)
 	    if (data == Qundef || hook->data == data) {
 		hook->hook_flags |= RUBY_EVENT_HOOK_FLAG_DELETED;
 		ret+=1;
-		list->need_clean++;
+		list->need_clean = TRUE;
 	    }
 	}
 	hook = hook->next;
@@ -230,7 +230,7 @@ clean_hooks(rb_hook_list_t *list)
     rb_event_hook_t *hook, **nextp = &list->hooks;
 
     list->events = 0;
-    list->need_clean = 0;
+    list->need_clean = FALSE;
 
     while ((hook = *nextp) != 0) {
 	if (hook->hook_flags & RUBY_EVENT_HOOK_FLAG_DELETED) {
@@ -265,14 +265,13 @@ exec_hooks_body(rb_thread_t *th, rb_hook_list_t *list, const rb_trace_arg_t *tra
 static int
 exec_hooks_precheck(rb_thread_t *th, rb_hook_list_t *list, const rb_trace_arg_t *trace_arg)
 {
-    if ((list->events & trace_arg->event) == 0) return 0;
-
-    if (UNLIKELY(list->need_clean > 0)) {
+    if (UNLIKELY(list->need_clean != FALSE)) {
 	if (th->vm->trace_running <= 1) { /* only running this hooks */
 	    clean_hooks(list);
 	}
     }
-    return 1;
+
+    return (list->events & trace_arg->event) != 0;
 }
 
 static void
@@ -318,10 +317,12 @@ rb_threadptr_exec_event_hooks_orig(rb_trace_arg_t *trace_arg, int pop_p)
 	}
 	else {
 	    rb_trace_arg_t *prev_trace_arg = th->trace_arg;
+	    th->vm->trace_running++;
 	    th->trace_arg = trace_arg;
 	    exec_hooks_unprotected(th, &th->event_hooks, trace_arg);
 	    exec_hooks_unprotected(th, &th->vm->event_hooks, trace_arg);
 	    th->trace_arg = prev_trace_arg;
+	    th->vm->trace_running--;
 	}
     }
     else {
@@ -595,6 +596,7 @@ get_event_id(rb_event_flag_t event)
 	C(b_return, B_RETURN);
 	C(thread_begin, THREAD_BEGIN);
 	C(thread_end, THREAD_END);
+	C(fiber_switch, FIBER_SWITCH);
 	C(specified_line, SPECIFIED_LINE);
       case RUBY_EVENT_LINE | RUBY_EVENT_SPECIFIED_LINE: CONST_ID(id, "line"); return id;
 #undef C
@@ -606,11 +608,11 @@ get_event_id(rb_event_flag_t event)
 static void
 call_trace_func(rb_event_flag_t event, VALUE proc, VALUE self, ID id, VALUE klass)
 {
-    const char *srcfile = rb_sourcefile();
+    int line;
+    const char *srcfile = rb_source_loc(&line);
     VALUE eventname = rb_str_new2(get_event_name(event));
     VALUE filename = srcfile ? rb_str_new2(srcfile) : Qnil;
     VALUE argv[6];
-    int line = rb_sourceline();
     rb_thread_t *th = GET_THREAD();
 
     if (!klass) {
@@ -700,6 +702,7 @@ symbol2event_flag(VALUE v)
     C(b_return, B_RETURN);
     C(thread_begin, THREAD_BEGIN);
     C(thread_end, THREAD_END);
+    C(fiber_switch, FIBER_SWITCH);
     C(specified_line, SPECIFIED_LINE);
     C(a_call, A_CALL);
     C(a_return, A_RETURN);
@@ -1445,6 +1448,7 @@ Init_vm_trace(void)
      * +:b_return+:: event hook at block ending
      * +:thread_begin+:: event hook at thread beginning
      * +:thread_end+:: event hook at thread ending
+     * +:fiber_siwtch+:: event hook at fiber switch
      *
      */
     rb_cTracePoint = rb_define_class("TracePoint", rb_cObject);

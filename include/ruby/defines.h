@@ -147,7 +147,12 @@ void xfree(void*);
 #undef _WIN32
 #endif
 
-#if defined(_WIN32) || defined(__EMX__)
+#if defined(_WIN32)
+/*
+  DOSISH mean MS-Windows style filesystem.
+  But you should use more precise macros like DOSISH_DRIVE_LETTER, PATH_SEP,
+  ENV_IGNORECASE or CASEFOLD_FILESYSTEM.
+ */
 #define DOSISH 1
 # define DOSISH_DRIVE_LETTER
 #endif
@@ -161,10 +166,6 @@ void xfree(void*);
 
 #ifdef _WIN32
 #include "ruby/win32.h"
-#endif
-
-#if defined(__BEOS__) && !defined(__HAIKU__) && !defined(BONE)
-#include <net/socket.h> /* intern.h needs fd_set definition */
 #endif
 
 #ifdef RUBY_EXPORT
@@ -220,7 +221,7 @@ void rb_ia64_flushrs(void);
 
 #define PATH_ENV "PATH"
 
-#if defined(DOSISH) && !defined(__EMX__)
+#if defined(DOSISH)
 #define ENV_IGNORECASE
 #endif
 
@@ -243,13 +244,16 @@ void rb_ia64_flushrs(void);
 #ifndef FUNC_MINIMIZED
 #define FUNC_MINIMIZED(x) x
 #endif
+#ifndef FUNC_UNOPTIMIZED
+#define FUNC_UNOPTIMIZED(x) x
+#endif
 #ifndef RUBY_ALIAS_FUNCTION_TYPE
 #define RUBY_ALIAS_FUNCTION_TYPE(type, prot, name, args) \
-    FUNC_MINIMIZED(type prot) {return name args;}
+    FUNC_MINIMIZED(type prot) {return (type)name args;}
 #endif
 #ifndef RUBY_ALIAS_FUNCTION_VOID
 #define RUBY_ALIAS_FUNCTION_VOID(prot, name, args) \
-    void prot {name args;}
+    FUNC_MINIMIZED(void prot) {name args;}
 #endif
 #ifndef RUBY_ALIAS_FUNCTION
 #define RUBY_ALIAS_FUNCTION(prot, name, args) \

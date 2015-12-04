@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002 Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -303,18 +302,18 @@ ossl_x509crl_set_revoked(VALUE self, VALUE ary)
 {
     X509_CRL *crl;
     X509_REVOKED *rev;
-    int i;
+    long i;
 
     Check_Type(ary, T_ARRAY);
     /* All ary members should be X509 Revoked */
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	OSSL_Check_Kind(RARRAY_PTR(ary)[i], cX509Rev);
+	OSSL_Check_Kind(RARRAY_AREF(ary, i), cX509Rev);
     }
     GetX509CRL(self, crl);
     sk_X509_REVOKED_pop_free(crl->crl->revoked, X509_REVOKED_free);
     crl->crl->revoked = NULL;
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	rev = DupX509RevokedPtr(RARRAY_PTR(ary)[i]);
+	rev = DupX509RevokedPtr(RARRAY_AREF(ary, i));
 	if (!X509_CRL_add0_revoked(crl, rev)) { /* NO DUP - don't free! */
 	    ossl_raise(eX509CRLError, NULL);
 	}
@@ -477,18 +476,18 @@ ossl_x509crl_set_extensions(VALUE self, VALUE ary)
 {
     X509_CRL *crl;
     X509_EXTENSION *ext;
-    int i;
+    long i;
 
     Check_Type(ary, T_ARRAY);
     /* All ary members should be X509 Extensions */
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	OSSL_Check_Kind(RARRAY_PTR(ary)[i], cX509Ext);
+	OSSL_Check_Kind(RARRAY_AREF(ary, i), cX509Ext);
     }
     GetX509CRL(self, crl);
     sk_X509_EXTENSION_pop_free(crl->crl->extensions, X509_EXTENSION_free);
     crl->crl->extensions = NULL;
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	ext = DupX509ExtPtr(RARRAY_PTR(ary)[i]);
+	ext = DupX509ExtPtr(RARRAY_AREF(ary, i));
 	if(!X509_CRL_add_ext(crl, ext, -1)) { /* DUPs ext - FREE it */
 	    X509_EXTENSION_free(ext);
 	    ossl_raise(eX509CRLError, NULL);
@@ -552,4 +551,3 @@ Init_ossl_x509crl(void)
     rb_define_method(cX509CRL, "extensions=", ossl_x509crl_set_extensions, 1);
     rb_define_method(cX509CRL, "add_extension", ossl_x509crl_add_extension, 1);
 }
-

@@ -1,3 +1,3 @@
 require 'mkmf'
-append_cflags("-std=iso9899:1999")
+config_string("strict_warnflags") {|w| $warnflags += " #{w}"}
 create_makefile('date_core')

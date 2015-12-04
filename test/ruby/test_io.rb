@@ -3,6 +3,7 @@ require 'test/unit'
 require 'tmpdir'
 require "fcntl"
 require 'io/nonblock'
+require 'pathname'
 require 'socket'
 require 'stringio'
 require 'timeout'
@@ -888,6 +889,17 @@ class TestIO < Test::Unit::TestCase
     dst.close!
   end
 
+  def test_copy_stream_pathname_to_pathname
+    bug11199 = '[ruby-dev:49008] [Bug #11199]'
+    mkcdtmpdir {
+      File.open("src", "w") {|f| f << "ok" }
+      src = Pathname.new("src")
+      dst = Pathname.new("dst")
+      IO.copy_stream(src, dst)
+      assert_equal("ok", IO.read("dst"), bug11199)
+    }
+  end
+
   def test_copy_stream_write_in_binmode
     bug8767 = '[ruby-core:56518] [Bug #8767]'
     mkcdtmpdir {
@@ -1080,7 +1092,9 @@ class TestIO < Test::Unit::TestCase
   def ruby(*args)
     args = ['-e', '$>.write($<.read)'] if args.empty?
     ruby = EnvUtil.rubybin
-    f = IO.popen([ruby] + args, 'r+')
+    opts = {}
+    opts[:rlimit_nproc] = 1024 if defined?(Process::RLIMIT_NPROC)
+    f = IO.popen([ruby] + args, 'r+', opts)
     pid = f.pid
     yield(f)
   ensure
@@ -1134,25 +1148,17 @@ class TestIO < Test::Unit::TestCase
   end
 
   def test_dup_many
-    ruby('-e', <<-'End') {|f|
-      ok = 0
+    opts = {}
+    opts[:rlimit_nofile] = 1024 if defined?(Process::RLIMIT_NOFILE)
+    assert_separately([], <<-'End', opts)
       a = []
-      begin
+      assert_raise(Errno::EMFILE, Errno::ENFILE, Errno::ENOMEM) do
         loop {a << IO.pipe}
-      rescue Errno::EMFILE, Errno::ENFILE, Errno::ENOMEM
-        ok += 1
       end
-      print "no" if ok != 1
-      begin
+      assert_raise(Errno::EMFILE, Errno::ENFILE, Errno::ENOMEM) do
         loop {a << [a[-1][0].dup, a[-1][1].dup]}
-      rescue Errno::EMFILE, Errno::ENFILE, Errno::ENOMEM
-        ok += 1
       end
-      print "no" if ok != 2
-      print "ok"
     End
-      assert_equal("ok", f.read)
-    }
   end
 
   def test_inspect
@@ -1497,23 +1503,21 @@ class TestIO < Test::Unit::TestCase
 
   def test_set_lineno
     make_tempfile {|t|
-      ruby("-e", <<-SRC, t.path) do |f|
+      assert_separately(["-", t.path], <<-SRC)
         open(ARGV[0]) do |f|
-          p $.
-          f.gets; p $.
-          f.gets; p $.
-          f.lineno = 1000; p $.
-          f.gets; p $.
-          f.gets; p $.
-          f.rewind; p $.
-          f.gets; p $.
-          f.gets; p $.
-          f.gets; p $.
-          f.gets; p $.
+          assert_equal(0, $.)
+          f.gets; assert_equal(1, $.)
+          f.gets; assert_equal(2, $.)
+          f.lineno = 1000; assert_equal(2, $.)
+          f.gets; assert_equal(1001, $.)
+          f.gets; assert_equal(1001, $.)
+          f.rewind; assert_equal(1001, $.)
+          f.gets; assert_equal(1, $.)
+          f.gets; assert_equal(2, $.)
+          f.gets; assert_equal(3, $.)
+          f.gets; assert_equal(3, $.)
         end
       SRC
-        assert_equal("0,1,2,2,1001,1001,1001,1,2,3,3", f.read.chomp.gsub("\n", ","))
-      end
 
       pipe(proc do |w|
         w.puts "foo"
@@ -3072,14 +3076,13 @@ End
     assert_normal_exit %q{
       require "tempfile"
 
-      # try to raise RLIM_NOFILE to >FD_SETSIZE
-      # Unfortunately, ruby export FD_SETSIZE. then we assume it's 1024.
+      # Unfortunately, ruby doesn't export FD_SETSIZE. then we assume it's 1024.
       fd_setsize = 1024
 
+      # try to raise RLIM_NOFILE to >FD_SETSIZE
       begin
-        Process.setrlimit(Process::RLIMIT_NOFILE, fd_setsize+10)
-      rescue =>e
-        # Process::RLIMIT_NOFILE couldn't be raised. skip the test
+        Process.setrlimit(Process::RLIMIT_NOFILE, fd_setsize+20)
+      rescue Errno::EPERM
         exit 0
       end
 
@@ -3090,7 +3093,7 @@ End
 
       IO.select(tempfiles)
     }, bug8080, timeout: 30
-  end
+  end if defined?(Process::RLIMIT_NOFILE)
 
   def test_read_32bit_boundary
     bug8431 = '[ruby-core:55098] [Bug #8431]'

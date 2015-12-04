@@ -42,6 +42,12 @@ int rb_thread_check_trap_pending(void);
 #define RARRAY_PTR(s) (RARRAY(s)->ptr)
 #define RARRAY_LEN(s) (RARRAY(s)->len)
 #endif
+#if !defined(RARRAY_CONST_PTR)
+#define RARRAY_CONST_PTR(s) (const VALUE *)RARRAY_PTR(s)
+#endif
+#if !defined(RARRAY_AREF)
+#define RARRAY_AREF(a, i) RARRAY_CONST_PTR(a)[i]
+#endif
 
 #ifdef OBJ_UNTRUST
 #define RbTk_OBJ_UNTRUST(x)  do {OBJ_TAINT(x); OBJ_UNTRUST(x);} while (0)
@@ -394,7 +400,7 @@ Tcl_SetVar2Ex(interp, name1, name2, newValObj, flags)
 /* from tkAppInit.c */
 
 #if TCL_MAJOR_VERSION < 8 || (TCL_MAJOR_VERSION == 8 && TCL_MINOR_VERSION < 4)
-#  if !defined __MINGW32__ && !defined __BORLANDC__
+#  if !defined __MINGW32__
 /*
  * The following variable is a special hack that is needed in order for
  * Sun shared libraries to be used for Tcl.
@@ -1263,10 +1269,17 @@ setup_rubytkkit(void)
 #ifdef __WIN32__
     /* rbtk_win32_SetHINSTANCE("tcltklib.so"); */
     {
-      volatile VALUE basename;
+# ifdef HAVE_RUBY_ENC_FIND_BASENAME
+      const char *base = ruby_enc_find_basename(rb_sourcefile(), NULL, NULL,
+						rb_filesystem_encoding());
+      rbtk_win32_SetHINSTANCE(base);
+# else
+      VALUE basename;
       basename = rb_funcall(rb_cFile, rb_intern("basename"), 1,
 			    rb_str_new2(rb_sourcefile()));
       rbtk_win32_SetHINSTANCE(RSTRING_PTR(basename));
+      RB_GC_GUARD(basename);
+# endif
     }
 #endif
     set_rubytk_kitpath(rb_sourcefile());
@@ -1882,15 +1895,15 @@ set_max_block_time(self, time)
     case T_BIGNUM:
         /* time is micro-second value */
         divmod = rb_funcall(time, rb_intern("divmod"), 1, LONG2NUM(1000000));
-        tcl_time.sec  = NUM2LONG(RARRAY_PTR(divmod)[0]);
-        tcl_time.usec = NUM2LONG(RARRAY_PTR(divmod)[1]);
+        tcl_time.sec  = NUM2LONG(RARRAY_AREF(divmod, 0));
+        tcl_time.usec = NUM2LONG(RARRAY_AREF(divmod, 1));
         break;
 
     case T_FLOAT:
         /* time is second value */
         divmod = rb_funcall(time, rb_intern("divmod"), 1, INT2FIX(1));
-        tcl_time.sec  = NUM2LONG(RARRAY_PTR(divmod)[0]);
-        tcl_time.usec = (long)(NUM2DBL(RARRAY_PTR(divmod)[1]) * 1000000);
+        tcl_time.sec  = NUM2LONG(RARRAY_AREF(divmod, 0));
+        tcl_time.usec = (long)(NUM2DBL(RARRAY_AREF(divmod, 1)) * 1000000);
 
     default:
         {
@@ -7020,7 +7033,7 @@ call_queue_handler(evPtr, flags)
     }
 
     /* set result */
-    RARRAY_PTR(q->result)[0] = ret;
+    RARRAY_ASET(q->result, 0, ret);
     ret = (VALUE)NULL;
 
     /* decr internal handler mark */
@@ -7203,7 +7216,7 @@ tk_funcall(func, argc, argv, obj)
     DUMP2("back from handler (current thread:%"PRIxVALUE")", current);
 
     /* get result & free allocated memory */
-    ret = RARRAY_PTR(result)[0];
+    ret = RARRAY_AREF(result, 0);
 #if 0 /* use Tcl_EventuallyFree */
     Tcl_EventuallyFree((ClientData)alloc_done, TCL_DYNAMIC); /* XXXXXXXX */
 #else
@@ -7512,7 +7525,7 @@ eval_queue_handler(evPtr, flags)
     }
 
     /* set result */
-    RARRAY_PTR(q->result)[0] = ret;
+    RARRAY_ASET(q->result, 0, ret);
     ret = (VALUE)NULL;
 
     /* decr internal handler mark */
@@ -7687,7 +7700,7 @@ ip_eval(self, str)
     DUMP2("back from handler (current thread:%"PRIxVALUE")", current);
 
     /* get result & free allocated memory */
-    ret = RARRAY_PTR(result)[0];
+    ret = RARRAY_AREF(result, 0);
 
 #if 0 /* use Tcl_EventuallyFree */
     Tcl_EventuallyFree((ClientData)alloc_done, TCL_DYNAMIC); /* XXXXXXXX */
@@ -9013,7 +9026,7 @@ invoke_queue_handler(evPtr, flags)
     }
 
     /* set result */
-    RARRAY_PTR(q->result)[0] = ret;
+    RARRAY_ASET(q->result, 0, ret);
     ret = (VALUE)NULL;
 
     /* decr internal handler mark */
@@ -9186,7 +9199,7 @@ ip_invoke_with_position(argc, argv, obj, position)
     DUMP2("back from handler (current thread:%"PRIxVALUE")", current);
 
     /* get result & free allocated memory */
-    ret = RARRAY_PTR(result)[0];
+    ret = RARRAY_AREF(result, 0);
 #if 0 /* use Tcl_EventuallyFree */
     Tcl_EventuallyFree((ClientData)alloc_done, TCL_DYNAMIC); /* XXXXXXXX */
 #else

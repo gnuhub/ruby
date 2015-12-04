@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -189,18 +188,18 @@ ossl_x509revoked_set_extensions(VALUE self, VALUE ary)
 {
     X509_REVOKED *rev;
     X509_EXTENSION *ext;
-    int i;
+    long i;
     VALUE item;
 
     Check_Type(ary, T_ARRAY);
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	OSSL_Check_Kind(RARRAY_PTR(ary)[i], cX509Ext);
+	OSSL_Check_Kind(RARRAY_AREF(ary, i), cX509Ext);
     }
     GetX509Rev(self, rev);
     sk_X509_EXTENSION_pop_free(rev->extensions, X509_EXTENSION_free);
     rev->extensions = NULL;
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	item = RARRAY_PTR(ary)[i];
+	item = RARRAY_AREF(ary, i);
 	ext = DupX509ExtPtr(item);
 	if(!X509_REVOKED_add_ext(rev, ext, -1)) {
 	    ossl_raise(eX509RevError, NULL);
@@ -244,4 +243,3 @@ Init_ossl_x509revoked(void)
     rb_define_method(cX509Rev, "extensions=", ossl_x509revoked_set_extensions, 1);
     rb_define_method(cX509Rev, "add_extension", ossl_x509revoked_add_extension, 1);
 }
-

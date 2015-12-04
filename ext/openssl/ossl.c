@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
  * All rights reserved.
@@ -567,7 +566,7 @@ static void Init_ossl_locks(void)
  *
  * If you use OSX, you should install another openssl and run ```./configure
  * --with-openssl-dir=/path/to/another-openssl```. For Homebrew user, run `brew
- * install openssl` and then ```./configure --with-openssl-dir=`brew prefix
+ * install openssl` and then ```./configure --with-openssl-dir=`brew --prefix
  * openssl` ```.
  *
  * = Examples
@@ -1179,4 +1178,3 @@ main(int argc, char *argv[])
     return 0;
 }
 #endif /* OSSL_DEBUG */
-

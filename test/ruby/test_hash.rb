@@ -506,7 +506,7 @@ class TestHash < Test::Unit::TestCase
     assert_equal(4, res.length)
     assert_equal %w( three two one nil ), res
 
-    assert_raises KeyError do
+    assert_raise KeyError do
       @h.fetch_values(3, 'invalid')
     end
 
@@ -1232,7 +1232,7 @@ class TestHash < Test::Unit::TestCase
     end
   end
 
-  def test_exception_in_rehash
+  def test_exception_in_rehash_memory_leak
     return unless @cls == Hash
 
     bug9187 = '[ruby-core:58728] [Bug #9187]'
@@ -1300,6 +1300,72 @@ class TestHash < Test::Unit::TestCase
     end
     assert_equal({:foo => 1, :'foo-bar' => 2, :'hello-world' => 3, :'hello-#{x}' => 4, :bar => {}}, hash, feature4935)
     x = x
+  end
+
+  def test_dig
+    h = @cls[a: @cls[b: [1, 2, 3]], c: 4]
+    assert_equal(1, h.dig(:a, :b, 0))
+    assert_nil(h.dig(:c, 1))
+  end
+
+  def test_cmp
+    h1 = {a:1, b:2}
+    h2 = {a:1, b:2, c:3}
+
+    assert_operator(h1, :<=, h1)
+    assert_operator(h1, :<=, h2)
+    assert_not_operator(h2, :<=, h1)
+    assert_operator(h2, :<=, h2)
+
+    assert_operator(h1, :>=, h1)
+    assert_not_operator(h1, :>=, h2)
+    assert_operator(h2, :>=, h1)
+    assert_operator(h2, :>=, h2)
+
+    assert_not_operator(h1, :<, h1)
+    assert_operator(h1, :<, h2)
+    assert_not_operator(h2, :<, h1)
+    assert_not_operator(h2, :<, h2)
+
+    assert_not_operator(h1, :>, h1)
+    assert_not_operator(h1, :>, h2)
+    assert_operator(h2, :>, h1)
+    assert_not_operator(h2, :>, h2)
+  end
+
+  def test_cmp_samekeys
+    h1 = {a:1}
+    h2 = {a:2}
+
+    assert_operator(h1, :<=, h1)
+    assert_not_operator(h1, :<=, h2)
+    assert_not_operator(h2, :<=, h1)
+    assert_operator(h2, :<=, h2)
+
+    assert_operator(h1, :>=, h1)
+    assert_not_operator(h1, :>=, h2)
+    assert_not_operator(h2, :>=, h1)
+    assert_operator(h2, :>=, h2)
+
+    assert_not_operator(h1, :<, h1)
+    assert_not_operator(h1, :<, h2)
+    assert_not_operator(h2, :<, h1)
+    assert_not_operator(h2, :<, h2)
+
+    assert_not_operator(h1, :>, h1)
+    assert_not_operator(h1, :>, h2)
+    assert_not_operator(h2, :>, h1)
+    assert_not_operator(h2, :>, h2)
+  end
+
+  def test_to_proc
+    h = {
+      1 => 10,
+      2 => 20,
+      3 => 30,
+    }
+
+    assert_equal([10, 20, 30], [1, 2, 3].map(&h))
   end
 
   class TestSubHash < TestHash

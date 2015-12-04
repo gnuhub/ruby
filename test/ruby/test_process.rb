@@ -404,8 +404,12 @@ class TestProcess < Test::Unit::TestCase
       IO.popen([*PWD, :chdir => d]) {|io|
         assert_equal(d, io.read.chomp)
       }
-      assert_raise(Errno::ENOENT) {
+      assert_raise_with_message(Errno::ENOENT, %r"d/notexist") {
         Process.wait Process.spawn(*PWD, :chdir => "d/notexist")
+      }
+      n = "d/\u{1F37A}"
+      assert_raise_with_message(Errno::ENOENT, /#{n}/) {
+        Process.wait Process.spawn(*PWD, :chdir => n)
       }
     }
   end
@@ -417,6 +421,24 @@ class TestProcess < Test::Unit::TestCase
       assert_file.exist?("open_chdir_test")
       assert_file.not_exist?("foo/open_chdir_test")
       assert_equal("#{d}/foo", File.read("open_chdir_test").chomp)
+    }
+  end
+
+  def test_execopts_open_failure
+    with_tmpchdir {|d|
+      assert_raise_with_message(Errno::ENOENT, %r"d/notexist") {
+        Process.wait Process.spawn(*PWD, :in => "d/notexist")
+      }
+      assert_raise_with_message(Errno::ENOENT, %r"d/notexist") {
+        Process.wait Process.spawn(*PWD, :out => "d/notexist")
+      }
+      n = "d/\u{1F37A}"
+      assert_raise_with_message(Errno::ENOENT, /#{n}/) {
+        Process.wait Process.spawn(*PWD, :in => n)
+      }
+      assert_raise_with_message(Errno::ENOENT, /#{n}/) {
+        Process.wait Process.spawn(*PWD, :out => n)
+      }
     }
   end
 
@@ -611,9 +633,9 @@ class TestProcess < Test::Unit::TestCase
         trap(:USR1) { print "trap\n" }
         system("cat", :in => "fifo")
       EOS
-        sleep 0.5
+        sleep 1
         Process.kill(:USR1, io.pid)
-        sleep 0.1
+        sleep 1
         File.write("fifo", "ok\n")
         assert_equal("trap\nok\n", io.read)
       }
@@ -948,7 +970,7 @@ class TestProcess < Test::Unit::TestCase
     rescue NotImplementedError
       skip "IO#close_on_exec= is not supported"
     end
-  end
+  end unless windows? # passing non-stdio fds is not supported on Windows
 
   def test_execopts_redirect_tempfile
     bug6269 = '[ruby-core:44181]'
@@ -1342,7 +1364,7 @@ class TestProcess < Test::Unit::TestCase
     return unless Signal.list.include?("QUIT")
 
     with_tmpchdir do
-      s = assert_in_out_err([], "Process.kill(:SIGQUIT, $$);sleep 30", //, //)
+      s = assert_in_out_err([], "Signal.trap(:QUIT,'DEFAULT'); Process.kill(:SIGQUIT, $$);sleep 30", //, //, rlimit_core: 0)
       assert_equal([false, true, false, nil],
                    [s.exited?, s.signaled?, s.stopped?, s.success?],
                    "[s.exited?, s.signaled?, s.stopped?, s.success?]")
@@ -1564,7 +1586,7 @@ class TestProcess < Test::Unit::TestCase
   end
 
   def test_aspawn_too_long_path
-    bug4315 = '[ruby-core:34833]'
+    bug4315 = '[ruby-core:34833] #7904 [ruby-core:52628] #11613'
     assert_fail_too_long_path(%w"echo |", bug4315)
   end
 
@@ -1574,11 +1596,13 @@ class TestProcess < Test::Unit::TestCase
     cmds = Array.new(min, cmd)
     exs = [Errno::ENOENT]
     exs << Errno::E2BIG if defined?(Errno::E2BIG)
+    opts = {[STDOUT, STDERR]=>File::NULL}
+    opts[:rlimit_nproc] = 128 if defined?(Process::RLIMIT_NPROC)
     EnvUtil.suppress_warning do
       assert_raise(*exs, mesg) do
         begin
           loop do
-            Process.spawn(cmds.join(sep), [STDOUT, STDERR]=>File::NULL)
+            Process.spawn(cmds.join(sep), opts)
             min = [cmds.size, min].max
             cmds *= 100
           end
@@ -1691,6 +1715,35 @@ class TestProcess < Test::Unit::TestCase
     IO.popen([RUBY, "-e", ""]) {|io|
       assert_predicate(io, :close_on_exec?)
     }
+  end
+
+  def test_popen_exit
+    bug11510 = '[ruby-core:70671] [Bug #11510]'
+    pid = nil
+    opt = {timeout: 10, stdout_filter: ->(s) {pid = s}}
+    if windows?
+      opt[:new_pgroup] = true
+    else
+      opt[:pgroup] = true
+    end
+    assert_ruby_status(["-", RUBY], <<-'end;', bug11510, **opt)
+      RUBY = ARGV[0]
+      th = Thread.start {
+        Thread.current.abort_on_exception = true
+        IO.popen([RUBY, "-esleep 15", err: [:child, :out]]) {|f|
+          STDOUT.puts f.pid
+          STDOUT.flush
+          sleep(2)
+        }
+      }
+      sleep(0.001) until th.stop?
+    end;
+    assert_match(/\A\d+\Z/, pid)
+  ensure
+    if pid
+      pid = pid.to_i
+      [:TERM, :KILL].each {|sig| Process.kill(sig, pid) rescue break}
+    end
   end
 
   def test_execopts_new_pgroup
@@ -2094,6 +2147,7 @@ EOS
       (3..6).each do |i|
         ret = run_in_child(<<-INPUT)
           begin
+            $VERBOSE = nil
             Process.exec('#{cmd}', 'dummy', #{i} => :close)
           rescue SystemCallError
           end

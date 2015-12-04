@@ -199,10 +199,10 @@ static VALUE
 warning_string(rb_encoding *enc, const char *fmt, va_list args)
 {
     VALUE str = rb_enc_str_new(0, 0, enc);
-    VALUE file = rb_sourcefilename();
+    int line;
+    VALUE file = rb_source_location(&line);
 
     if (!NIL_P(file)) {
-	int line = rb_sourceline();
 	str = rb_str_append(str, file);
 	if (line) rb_str_catf(str, ":%d", line);
 	rb_str_cat2(str, ": ");
@@ -399,8 +399,7 @@ rb_bug(const char *fmt, ...)
     int line = 0;
 
     if (GET_THREAD()) {
-	file = rb_sourcefile();
-	line = rb_sourceline();
+	file = rb_source_loc(&line);
     }
 
     report_bug(file, line, fmt, NULL);
@@ -415,8 +414,7 @@ rb_bug_context(const void *ctx, const char *fmt, ...)
     int line = 0;
 
     if (GET_THREAD()) {
-	file = rb_sourcefile();
-	line = rb_sourceline();
+	file = rb_source_loc(&line);
     }
 
     report_bug(file, line, fmt, ctx);
@@ -520,9 +518,8 @@ rb_builtin_type_name(int t)
     return 0;
 }
 
-#define builtin_class_name rb_builtin_class_name
-const char *
-rb_builtin_class_name(VALUE x)
+static const char *
+builtin_class_name(VALUE x)
 {
     const char *etype;
 
@@ -542,6 +539,17 @@ rb_builtin_class_name(VALUE x)
 	etype = "false";
     }
     else {
+	etype = NULL;
+    }
+    return etype;
+}
+
+const char *
+rb_builtin_class_name(VALUE x)
+{
+    const char *etype = builtin_class_name(x);
+
+    if (!etype) {
 	etype = rb_obj_classname(x);
     }
     return etype;
@@ -560,8 +568,13 @@ rb_check_type(VALUE x, int t)
     if (xt != t || (xt == T_DATA && RTYPEDDATA_P(x))) {
 	const char *tname = rb_builtin_type_name(t);
 	if (tname) {
-	    rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
-		     builtin_class_name(x), tname);
+	    const char *cname = builtin_class_name(x);
+	    if (cname)
+		rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
+			 cname, tname);
+	    else
+		rb_raise(rb_eTypeError, "wrong argument type %"PRIsVALUE" (expected %s)",
+			 rb_obj_class(x), tname);
 	}
 	if (xt > T_MASK && xt <= 0x3f) {
 	    rb_fatal("unknown type 0x%x (0x%x given, probably comes from extension library for ruby 1.8)", t, xt);
@@ -594,19 +607,23 @@ void *
 rb_check_typeddata(VALUE obj, const rb_data_type_t *data_type)
 {
     const char *etype;
-    static const char mesg[] = "wrong argument type %s (expected %s)";
 
     if (!RB_TYPE_P(obj, T_DATA)) {
+      wrong_type:
 	etype = builtin_class_name(obj);
-	rb_raise(rb_eTypeError, mesg, etype, data_type->wrap_struct_name);
+	if (!etype)
+	    rb_raise(rb_eTypeError, "wrong argument type %"PRIsVALUE" (expected %s)",
+		     rb_obj_class(obj), data_type->wrap_struct_name);
+      wrong_datatype:
+	rb_raise(rb_eTypeError, "wrong argument type %s (expected %s)",
+		 etype, data_type->wrap_struct_name);
     }
     if (!RTYPEDDATA_P(obj)) {
-	etype = rb_obj_classname(obj);
-	rb_raise(rb_eTypeError, mesg, etype, data_type->wrap_struct_name);
+	goto wrong_type;
     }
     else if (!rb_typeddata_inherited_p(RTYPEDDATA_TYPE(obj), data_type)) {
 	etype = RTYPEDDATA_TYPE(obj)->wrap_struct_name;
-	rb_raise(rb_eTypeError, mesg, etype, data_type->wrap_struct_name);
+	goto wrong_datatype;
     }
     return DATA_PTR(obj);
 }
@@ -643,6 +660,7 @@ static VALUE rb_eNOERROR;
 
 static ID id_new, id_cause, id_message, id_backtrace;
 static ID id_name, id_args, id_Errno, id_errno, id_i_path;
+static ID id_receiver;
 extern ID ruby_static_id_status;
 #define id_bt idBt
 #define id_bt_locations idBt_locations
@@ -1170,6 +1188,17 @@ rb_name_err_mesg_new(VALUE mesg, VALUE recv, VALUE method)
     return result;
 }
 
+VALUE
+rb_name_err_new(VALUE mesg, VALUE recv, VALUE method)
+{
+    VALUE exc = rb_obj_alloc(rb_eNameError);
+    rb_ivar_set(exc, id_mesg, rb_name_err_mesg_new(mesg, recv, method));
+    rb_ivar_set(exc, id_bt, Qnil);
+    rb_ivar_set(exc, id_name, method);
+    rb_ivar_set(exc, id_receiver, recv);
+    return exc;
+}
+
 /* :nodoc: */
 static VALUE
 name_err_mesg_equal(VALUE obj1, VALUE obj2)
@@ -1200,20 +1229,22 @@ name_err_mesg_to_str(VALUE obj)
     mesg = ptr[NAME_ERR_MESG__MESG];
     if (NIL_P(mesg)) return Qnil;
     else {
-	const char *desc = 0;
-	VALUE d = 0, args[NAME_ERR_MESG_COUNT];
-	int state = 0;
+	struct RString s_str, d_str;
+	VALUE c, s, d = 0, args[4];
+	int state = 0, singleton = 0;
+	rb_encoding *usascii = rb_usascii_encoding();
 
+#define FAKE_CSTR(v, str) rb_setup_fake_str((v), (str), rb_strlen_lit(str), usascii)
 	obj = ptr[NAME_ERR_MESG__RECV];
 	switch (obj) {
 	  case Qnil:
-	    desc = "nil";
+	    d = FAKE_CSTR(&d_str, "nil");
 	    break;
 	  case Qtrue:
-	    desc = "true";
+	    d = FAKE_CSTR(&d_str, "true");
 	    break;
 	  case Qfalse:
-	    desc = "false";
+	    d = FAKE_CSTR(&d_str, "false");
 	    break;
 	  default:
 	    d = rb_protect(rb_inspect, obj, &state);
@@ -1222,18 +1253,22 @@ name_err_mesg_to_str(VALUE obj)
 	    if (NIL_P(d) || RSTRING_LEN(d) > 65) {
 		d = rb_any_to_s(obj);
 	    }
-	    desc = RSTRING_PTR(d);
+	    singleton = (RSTRING_LEN(d) > 0 && RSTRING_PTR(d)[0] == '#');
+	    d = QUOTE(d);
 	    break;
 	}
-	if (desc && desc[0] != '#') {
-	    d = d ? rb_str_dup(d) : rb_str_new2(desc);
-	    rb_str_cat2(d, ":");
-	    rb_str_append(d, rb_class_name(CLASS_OF(obj)));
+	if (!singleton) {
+	    s = FAKE_CSTR(&s_str, ":");
+	    c = rb_class_name(CLASS_OF(obj));
 	}
-	args[0] = mesg;
-	args[1] = ptr[NAME_ERR_MESG__NAME];
-	args[2] = d;
-	mesg = rb_f_sprintf(NAME_ERR_MESG_COUNT, args);
+	else {
+	    c = s = FAKE_CSTR(&s_str, "");
+	}
+	args[0] = QUOTE(rb_obj_as_string(ptr[NAME_ERR_MESG__NAME]));
+	args[1] = d;
+	args[2] = s;
+	args[3] = c;
+	mesg = rb_str_format(4, args, mesg);
     }
     return mesg;
 }
@@ -1262,8 +1297,12 @@ name_err_mesg_load(VALUE klass, VALUE str)
 static VALUE
 name_err_receiver(VALUE self)
 {
-    VALUE *ptr, mesg = rb_attr_get(self, id_mesg);
+    VALUE *ptr, recv, mesg;
 
+    recv = rb_ivar_lookup(self, id_receiver, Qundef);
+    if (recv != Qundef) return recv;
+
+    mesg = rb_attr_get(self, id_mesg);
     if (!rb_typeddata_is_kind_of(mesg, &name_err_mesg_data_type)) {
 	rb_raise(rb_eArgError, "no receiver is available");
     }
@@ -1567,7 +1606,7 @@ syserr_eqq(VALUE self, VALUE exc)
  *
  *  <em>raises the exception:</em>
  *
- *     ArgumentError: wrong number of arguments (2 for 1)
+ *     ArgumentError: wrong number of arguments (given 2, expected 1)
  *
  *  Ex: passing an argument that is not acceptable:
  *
@@ -1934,6 +1973,7 @@ Init_Exception(void)
     id_backtrace = rb_intern_const("backtrace");
     id_name = rb_intern_const("name");
     id_args = rb_intern_const("args");
+    id_receiver = rb_intern_const("receiver");
     id_Errno = rb_intern_const("Errno");
     id_errno = rb_intern_const("errno");
     id_i_path = rb_intern_const("@path");
@@ -2201,8 +2241,20 @@ rb_error_frozen(const char *what)
 void
 rb_error_frozen_object(VALUE frozen_obj)
 {
-    rb_raise(rb_eRuntimeError, "can't modify frozen %"PRIsVALUE,
-	     CLASS_OF(frozen_obj));
+    VALUE debug_info;
+    const ID created_info = id_debug_created_info;
+
+    if (!NIL_P(debug_info = rb_attr_get(frozen_obj, created_info))) {
+	VALUE path = rb_ary_entry(debug_info, 0);
+	VALUE line = rb_ary_entry(debug_info, 1);
+
+	rb_raise(rb_eRuntimeError, "can't modify frozen %"PRIsVALUE", created at %"PRIsVALUE":%"PRIsVALUE,
+		 CLASS_OF(frozen_obj), path, line);
+    }
+    else {
+	rb_raise(rb_eRuntimeError, "can't modify frozen %"PRIsVALUE,
+		 CLASS_OF(frozen_obj));
+    }
 }
 
 #undef rb_check_frozen

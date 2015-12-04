@@ -15,14 +15,15 @@ if inc = arg['i']
   end
 end
 %>baseruby="<%=arg['BASERUBY']%>"
-ruby="${RUBY-$baseruby}"
+_\
+=begin
 _=
-"eval" "{" \
-"`expr \"$ruby\" : echo > /dev/null || echo exec`" \
-"$ruby" '-r"`expr \"$0\" : / > /dev/null || pwd`/${0#/}" "$@";' \
-"}" || "exit" "$?"
-_=baseruby
-ruby=ruby
+ruby="${RUBY-$baseruby}"
+case "$ruby" in "echo "*) $ruby; exit $?;; esac
+case "$0" in /*) r=-r"$0";; *) r=-r"./$0";; esac
+exec $ruby "$r" "$@"
+=end
+=baseruby
 class Object
   remove_const :CROSS_COMPILING if defined?(CROSS_COMPILING)
   CROSS_COMPILING = RUBY_PLATFORM
@@ -32,8 +33,8 @@ class Object
 % }
 end
 builddir = File.dirname(File.expand_path(__FILE__))
-top_srcdir = File.expand_path("<%=arg['srcdir']%>", builddir)
-$:.unshift(builddir)
+srcdir = "<%=arg['srcdir']%>"
+top_srcdir = File.realpath(srcdir, builddir)
 fake = File.join(top_srcdir, "tool/fake.rb")
 eval(File.read(fake), nil, fake)
 ENV["RUBYOPT"] = ["-r#{__FILE__}", ENV["RUBYOPT"]].compact.join(" ")

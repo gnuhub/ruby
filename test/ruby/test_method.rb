@@ -770,23 +770,6 @@ class TestMethod < Test::Unit::TestCase
     }, '[Bug #7825]'
   end
 
-  def test_unlinked_method_entry_in_method_object_bug
-    bug8100 = '[ruby-core:53640] [Bug #8100]'
-    begin
-      assert_normal_exit %q{
-      loop do
-        def x
-          "hello" * 1000
-        end
-        method(:x).call
-      end
-      }, bug8100, timeout: 2
-    rescue Timeout::Error => e
-    else
-    end
-    assert_raise(Timeout::Error, bug8100) {raise e if e}
-  end
-
   def test_singleton_method
     feature8391 = '[ruby-core:54914] [Feature #8391]'
     c1 = Class.new
@@ -935,5 +918,22 @@ class TestMethod < Test::Unit::TestCase
     assert_equal(123, b.local_variable_get(:foo))
     assert_equal(456, b.local_variable_get(:bar))
     assert_equal([:bar, :foo], b.local_variables.sort)
+  end
+
+  class MethodInMethodClass
+    def m1
+      def m2
+      end
+    end
+    private
+  end
+
+  def test_method_in_method_visibility_should_be_public
+    assert_equal([:m1].sort, MethodInMethodClass.public_instance_methods(false).sort)
+    assert_equal([].sort, MethodInMethodClass.private_instance_methods(false).sort)
+
+    MethodInMethodClass.new.m1
+    assert_equal([:m1, :m2].sort, MethodInMethodClass.public_instance_methods(false).sort)
+    assert_equal([].sort, MethodInMethodClass.private_instance_methods(false).sort)
   end
 end

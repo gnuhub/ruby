@@ -356,16 +356,12 @@ class TestRubyYieldGen < Test::Unit::TestCase
   end
 
   def assert_all_sentences(syntax, *args)
-    fails = []
     syntax = Sentence.expand_syntax(syntax)
-    Sentence.each(syntax, *args) {|t|
-      begin
-        yield t
-      rescue MiniTest::Assertion => e
-        fails << e.message
-      end
-    }
-    assert(fails.empty?, proc {fails.join("\n--------\n")})
+    all_assertions do |a|
+      Sentence.each(syntax, *args) {|t|
+        a.for(t) {yield t}
+      }
+    end
   end
 
   def test_yield
@@ -400,5 +396,29 @@ class TestRubyYieldGen < Test::Unit::TestCase
       super
     end
     assert_equal [m, nil], y.s(m){|a,b|[a,b]}
+  end
+
+  def test_block_cached_argc
+    # [Bug #11451]
+    assert_separately([], <<-"end;")
+      class Yielder
+        def each
+          yield :x, :y, :z
+        end
+      end
+      class Getter1
+        include Enumerable
+        def each(&block)
+          Yielder.new.each(&block)
+        end
+      end
+      class Getter2
+        include Enumerable
+        def each
+          Yielder.new.each { |a, b, c, d| yield(a) }
+        end
+      end
+      Getter1.new.map{Getter2.new.each{|x|}}
+    end;
   end
 end

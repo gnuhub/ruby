@@ -215,8 +215,8 @@ features_index_add_single(VALUE short_feature, VALUE offset)
 /* Add to the loaded-features index all the required entries for
    `feature`, located at `offset` in $LOADED_FEATURES.  We add an
    index entry at each string `short_feature` for which
-     feature == "#{prefix}#{short_feature}#{e}"
-   where `e` is empty or matches %r{^\.[^./]*$}, and `prefix` is empty
+     feature == "#{prefix}#{short_feature}#{ext}"
+   where `ext` is empty or matches %r{^\.[^./]*$}, and `prefix` is empty
    or ends in '/'.  This maintains the invariant that `rb_feature_p()`
    relies on for its fast lookup.
 */
@@ -239,16 +239,19 @@ features_index_add(VALUE feature, VALUE offset)
 
     p = ext ? ext : feature_end;
     while (1) {
+	long beg;
+
 	p--;
 	while (p >= feature_str && *p != '/')
 	    p--;
 	if (p < feature_str)
 	    break;
 	/* Now *p == '/'.  We reach this point for every '/' in `feature`. */
-	short_feature = rb_str_subseq(feature, p + 1 - feature_str, feature_end - p - 1);
+	beg = p + 1 - feature_str;
+	short_feature = rb_str_subseq(feature, beg, feature_end - p - 1);
 	features_index_add_single(short_feature, offset);
 	if (ext) {
-	    short_feature = rb_str_subseq(feature, p + 1 - feature_str, ext - p - 1);
+	    short_feature = rb_str_subseq(feature, beg, ext - p - 1);
 	    features_index_add_single(short_feature, offset);
 	}
     }
@@ -695,11 +698,7 @@ rb_f_load(int argc, VALUE *argv)
 
     rb_scan_args(argc, argv, "11", &fname, &wrap);
 
-    if (RUBY_DTRACE_LOAD_ENTRY_ENABLED()) {
-	RUBY_DTRACE_LOAD_ENTRY(StringValuePtr(fname),
-			       rb_sourcefile(),
-			       rb_sourceline());
-    }
+    RUBY_DTRACE_HOOK(LOAD_ENTRY, StringValuePtr(fname));
 
     orig_fname = FilePathValue(fname);
     fname = rb_str_encode_ospath(orig_fname);
@@ -711,11 +710,7 @@ rb_f_load(int argc, VALUE *argv)
     }
     rb_load_internal(path, RTEST(wrap));
 
-    if (RUBY_DTRACE_LOAD_RETURN_ENABLED()) {
-	RUBY_DTRACE_LOAD_RETURN(StringValuePtr(fname),
-			       rb_sourcefile(),
-			       rb_sourceline());
-    }
+    RUBY_DTRACE_HOOK(LOAD_RETURN, StringValuePtr(fname));
 
     return Qtrue;
 }
@@ -964,11 +959,7 @@ rb_require_internal(VALUE fname, int safe)
     } volatile saved;
     char *volatile ftptr = 0;
 
-    if (RUBY_DTRACE_REQUIRE_ENTRY_ENABLED()) {
-	RUBY_DTRACE_REQUIRE_ENTRY(StringValuePtr(fname),
-				  rb_sourcefile(),
-				  rb_sourceline());
-    }
+    RUBY_DTRACE_HOOK(REQUIRE_ENTRY, StringValuePtr(fname));
 
     TH_PUSH_TAG(th);
     saved.safe = rb_safe_level();
@@ -981,20 +972,12 @@ rb_require_internal(VALUE fname, int safe)
 	FilePathValue(fname);
 	rb_set_safe_level_force(0);
 
-	if (RUBY_DTRACE_FIND_REQUIRE_ENTRY_ENABLED()) {
-	    RUBY_DTRACE_FIND_REQUIRE_ENTRY(StringValuePtr(fname),
-					   rb_sourcefile(),
-					   rb_sourceline());
-	}
+	RUBY_DTRACE_HOOK(FIND_REQUIRE_ENTRY, StringValuePtr(fname));
 
 	path = rb_str_encode_ospath(fname);
 	found = search_required(path, &path, safe);
 
-	if (RUBY_DTRACE_FIND_REQUIRE_RETURN_ENABLED()) {
-	    RUBY_DTRACE_FIND_REQUIRE_RETURN(StringValuePtr(fname),
-					    rb_sourcefile(),
-					    rb_sourceline());
-	}
+	RUBY_DTRACE_HOOK(FIND_REQUIRE_RETURN, StringValuePtr(fname));
 	if (found) {
 	    if (!path || !(ftptr = load_lock(RSTRING_PTR(path)))) {
 		result = 0;
@@ -1033,11 +1016,7 @@ rb_require_internal(VALUE fname, int safe)
 
     th->errinfo = errinfo;
 
-    if (RUBY_DTRACE_REQUIRE_RETURN_ENABLED()) {
-	RUBY_DTRACE_REQUIRE_RETURN(StringValuePtr(fname),
-				  rb_sourcefile(),
-				  rb_sourceline());
-    }
+    RUBY_DTRACE_HOOK(REQUIRE_RETURN, StringValuePtr(fname));
 
     return result;
 }

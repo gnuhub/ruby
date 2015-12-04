@@ -8,8 +8,8 @@
   Copyright (C) 2009 Koichi Sasada
 
 **********************************************************************/
-#ifndef METHOD_H
-#define METHOD_H
+#ifndef RUBY_METHOD_H
+#define RUBY_METHOD_H 1
 
 #include "internal.h"
 
@@ -27,7 +27,9 @@ typedef enum {
     METHOD_VISI_UNDEF     = 0x00,
     METHOD_VISI_PUBLIC    = 0x01,
     METHOD_VISI_PRIVATE   = 0x02,
-    METHOD_VISI_PROTECTED = 0x03
+    METHOD_VISI_PROTECTED = 0x03,
+
+    METHOD_VISI_MASK = 0x03
 } rb_method_visibility_t;
 
 typedef struct rb_scope_visi_struct {
@@ -40,7 +42,7 @@ typedef struct rb_cref_struct {
     const VALUE refinements;
     const VALUE klass;
     struct rb_cref_struct * const next;
-    rb_scope_visibility_t scope_visi;
+    const rb_scope_visibility_t scope_visi;
 } rb_cref_t;
 
 /* method data type */
@@ -63,42 +65,36 @@ typedef struct rb_callable_method_entry_struct { /* same fields with rb_method_e
 
 #define METHOD_ENTRY_VISI(me)  (rb_method_visibility_t)(((me)->flags & (IMEMO_FL_USER0 | IMEMO_FL_USER1)) >> (IMEMO_FL_USHIFT+0))
 #define METHOD_ENTRY_BASIC(me) (int)                   (((me)->flags & (IMEMO_FL_USER2                 )) >> (IMEMO_FL_USHIFT+2))
-#define METHOD_ENTRY_SAFE(me)  (int)                   (((me)->flags & (IMEMO_FL_USER3 | IMEMO_FL_USER4)) >> (IMEMO_FL_USHIFT+3))
+#define METHOD_ENTRY_COMPLEMENTED(me)     ((me)->flags & IMEMO_FL_USER3)
+#define METHOD_ENTRY_COMPLEMENTED_SET(me) ((me)->flags = (me)->flags | IMEMO_FL_USER3)
 
 static inline void
 METHOD_ENTRY_VISI_SET(rb_method_entry_t *me, rb_method_visibility_t visi)
 {
-    VM_ASSERT(visi >= 0 && visi <= 3);
-    me->flags = (me->flags & ~(IMEMO_FL_USER0 | IMEMO_FL_USER1)) | (visi << IMEMO_FL_USHIFT+0);
+    VM_ASSERT((int)visi >= 0 && visi <= 3);
+    me->flags = (me->flags & ~(IMEMO_FL_USER0 | IMEMO_FL_USER1)) | (visi << (IMEMO_FL_USHIFT+0));
 }
 static inline void
 METHOD_ENTRY_BASIC_SET(rb_method_entry_t *me, unsigned int basic)
 {
     VM_ASSERT(basic <= 1);
-    me->flags = (me->flags & ~(IMEMO_FL_USER2                 )) | (basic << IMEMO_FL_USHIFT+2);
+    me->flags = (me->flags & ~(IMEMO_FL_USER2                 )) | (basic << (IMEMO_FL_USHIFT+2));
 }
 static inline void
-METHOD_ENTRY_SAFE_SET(rb_method_entry_t *me, unsigned int safe)
+METHOD_ENTRY_FLAGS_SET(rb_method_entry_t *me, rb_method_visibility_t visi, unsigned int basic)
 {
-    VM_ASSERT(safe <= 1);
-    me->flags = (me->flags & ~(IMEMO_FL_USER3 | IMEMO_FL_USER4)) | (safe << IMEMO_FL_USHIFT+3);
-}
-static inline void
-METHOD_ENTRY_FLAGS_SET(rb_method_entry_t *me, rb_method_visibility_t visi, unsigned int basic, unsigned int safe)
-{
-    VM_ASSERT(visi >= 0 && visi <= 3);
+    VM_ASSERT((int)visi >= 0 && visi <= 3);
     VM_ASSERT(basic <= 1);
-    VM_ASSERT(safe <= 1);
     me->flags =
-      (me->flags & ~(IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2|IMEMO_FL_USER3|IMEMO_FL_USER4)) |
-	((visi << IMEMO_FL_USHIFT+0) | (basic << (IMEMO_FL_USHIFT+2)) | (safe << IMEMO_FL_USHIFT+3));
+      (me->flags & ~(IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2)) |
+	((visi << (IMEMO_FL_USHIFT+0)) | (basic << (IMEMO_FL_USHIFT+2)));
 }
 static inline void
 METHOD_ENTRY_FLAGS_COPY(rb_method_entry_t *dst, const rb_method_entry_t *src)
 {
     dst->flags =
-      (dst->flags & ~(IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2|IMEMO_FL_USER3|IMEMO_FL_USER4)) |
-	(src->flags & (IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2|IMEMO_FL_USER3|IMEMO_FL_USER4));
+      (dst->flags & ~(IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2)) |
+	(src->flags & (IMEMO_FL_USER0|IMEMO_FL_USER1|IMEMO_FL_USER2));
 }
 
 typedef enum {
@@ -118,11 +114,14 @@ typedef enum {
     END_OF_ENUMERATION(VM_METHOD_TYPE)
 } rb_method_type_t;
 
+#ifndef rb_iseq_t
 typedef struct rb_iseq_struct rb_iseq_t;
+#define rb_iseq_t rb_iseq_t
+#endif
 
 typedef struct rb_method_iseq_struct {
     const rb_iseq_t * const iseqptr;              /* should be separated from iseqval */
-    rb_cref_t * const cref;                       /* shoudl be marked */
+    rb_cref_t * const cref;                       /* should be marked */
 } rb_method_iseq_t; /* check rb_add_method_iseq() when modify the fields */
 
 typedef struct rb_method_cfunc_struct {
@@ -133,7 +132,7 @@ typedef struct rb_method_cfunc_struct {
 
 typedef struct rb_method_attr_struct {
     ID id;
-    const VALUE location; /* sould be marked */
+    const VALUE location; /* should be marked */
 } rb_method_attr_t;
 
 typedef struct rb_method_alias_struct {
@@ -146,8 +145,9 @@ typedef struct rb_method_refined_struct {
 } rb_method_refined_t;
 
 typedef struct rb_method_definition_struct {
-    rb_method_type_t type; /* method type */
-    int alias_count;
+    rb_method_type_t type :  8; /* method type */
+    int alias_count       : 28;
+    int complemented_count: 28;
 
     union {
 	rb_method_iseq_t iseq;
@@ -197,6 +197,7 @@ int rb_method_entry_arity(const rb_method_entry_t *me);
 int rb_method_entry_eq(const rb_method_entry_t *m1, const rb_method_entry_t *m2);
 st_index_t rb_hash_method_entry(st_index_t hash, const rb_method_entry_t *me);
 
+VALUE rb_method_entry_location(const rb_method_entry_t *me);
 VALUE rb_mod_method_location(VALUE mod, ID id);
 VALUE rb_obj_method_location(VALUE obj, ID id);
 
@@ -209,4 +210,4 @@ void rb_method_entry_copy(rb_method_entry_t *dst, const rb_method_entry_t *src);
 
 void rb_scope_visibility_set(rb_method_visibility_t);
 
-#endif /* METHOD_H */
+#endif /* RUBY_METHOD_H */

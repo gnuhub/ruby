@@ -138,7 +138,8 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
     if (SPECIAL_CONST_P(a)) {
 	if (a == Qundef) return 0;
 	if (STATIC_SYM_P(a)) {
-	    a >>= (RUBY_SPECIAL_SHIFT + ID_SCOPE_SHIFT);
+	    hnum = a >> (RUBY_SPECIAL_SHIFT + ID_SCOPE_SHIFT);
+	    goto out;
 	}
 	else if (FLONUM_P(a)) {
 	    /* prevent pathological behavior: [Bug #10761] */
@@ -160,6 +161,7 @@ any_hash(VALUE a, st_index_t (*other_func)(VALUE))
     else {
 	hnum = other_func(a);
     }
+  out:
     hnum <<= 1;
     return (st_index_t)RSHIFT(hnum, 1);
 }
@@ -177,10 +179,31 @@ rb_any_hash(VALUE a)
     return any_hash(a, obj_any_hash);
 }
 
+static st_index_t
+rb_num_hash_start(st_index_t n)
+{
+    /*
+     * This hash function is lightly-tuned for Ruby.  Further tuning
+     * should be possible.  Notes:
+     *
+     * - (n >> 3) alone is great for heap objects and OK for fixnum,
+     *   however symbols perform poorly.
+     * - (n >> (RUBY_SPECIAL_SHIFT+3)) was added to make symbols hash well,
+     *   n.b.: +3 to remove most ID scope, +1 worked well initially, too
+     *   n.b.: +1 (instead of 3) worked well initially, too
+     * - (n << 3) was finally added to avoid losing bits for fixnums
+     * - avoid expensive modulo instructions, it is currently only
+     *   shifts and bitmask operations.
+     */
+    return (n >> (RUBY_SPECIAL_SHIFT + 3) | (n << 3)) ^ (n >> 3);
+}
+
 long
 rb_objid_hash(st_index_t index)
 {
-    st_index_t hnum = rb_hash_start(index);
+    st_index_t hnum = rb_num_hash_start(index);
+
+    hnum = rb_hash_start(hnum);
     hnum = rb_hash_uint(hnum, (st_index_t)rb_any_hash);
     hnum = rb_hash_end(hnum);
     return hnum;
@@ -215,28 +238,18 @@ static const struct st_hash_type objhash = {
 static st_index_t
 rb_ident_hash(st_data_t n)
 {
+#ifdef USE_FLONUM /* RUBY */
     /*
-     * This hash function is lightly-tuned for Ruby.  Further tuning
-     * should be possible.  Notes:
-     *
-     * - (n >> 3) alone is great for heap objects and OK for fixnum,
-     *   however symbols perform poorly.
-     * - (n >> (RUBY_SPECIAL_SHIFT+3)) was added to make symbols hash well,
-     *   n.b.: +3 to remove ID scope, +1 worked well initially, too
-     * - (n << 3) was finally added to avoid losing bits for fixnums
-     * - avoid expensive modulo instructions, it is currently only
-     *   shifts and bitmask operations.
      * - flonum (on 64-bit) is pathologically bad, mix the actual
      *   float value in, but do not use the float value as-is since
      *   many integers get interpreted as 2.0 or -2.0 [Bug #10761]
      */
-#ifdef USE_FLONUM /* RUBY */
     if (FLONUM_P(n)) {
 	n ^= (st_data_t)rb_float_value(n);
     }
 #endif
 
-    return (st_index_t)((n>>(RUBY_SPECIAL_SHIFT+3)|(n<<3)) ^ (n>>3));
+    return (st_index_t)rb_num_hash_start((st_index_t)n);
 }
 
 static const struct st_hash_type identhash = {
@@ -368,9 +381,7 @@ hash_alloc(VALUE klass)
 static VALUE
 empty_hash_alloc(VALUE klass)
 {
-    if (RUBY_DTRACE_HASH_CREATE_ENABLED()) {
-	RUBY_DTRACE_HASH_CREATE(0, rb_sourcefile(), rb_sourceline());
-    }
+    RUBY_DTRACE_CREATE_HOOK(HASH, 0);
 
     return hash_alloc(klass);
 }
@@ -710,7 +721,7 @@ rb_hash_rehash_i(VALUE key, VALUE value, VALUE arg)
  *  Rebuilds the hash based on the current hash values for each key. If
  *  values of key objects have changed since they were inserted, this
  *  method will reindex <i>hsh</i>. If <code>Hash#rehash</code> is
- *  called while an iterator is traversing the hash, an
+ *  called while an iterator is traversing the hash, a
  *  <code>RuntimeError</code> will be raised in the iterator.
  *
  *     a = [ "a", "b" ]
@@ -747,8 +758,8 @@ rb_hash_rehash(VALUE hash)
     return hash;
 }
 
-static VALUE
-hash_default_value(VALUE hash, VALUE key)
+VALUE
+rb_hash_default_value(VALUE hash, VALUE key)
 {
     if (rb_method_basic_definition_p(CLASS_OF(hash), id_default)) {
 	VALUE ifnone = RHASH_IFNONE(hash);
@@ -781,7 +792,7 @@ rb_hash_aref(VALUE hash, VALUE key)
     st_data_t val;
 
     if (!RHASH(hash)->ntbl || !st_lookup(RHASH(hash)->ntbl, key, &val)) {
-	return hash_default_value(hash, key);
+	return rb_hash_default_value(hash, key);
     }
     return (VALUE)val;
 }
@@ -891,14 +902,15 @@ rb_hash_fetch(VALUE hash, VALUE key)
 static VALUE
 rb_hash_default(int argc, VALUE *argv, VALUE hash)
 {
-    VALUE key, ifnone;
+    VALUE args[2], ifnone;
 
     rb_check_arity(argc, 0, 1);
-    key = argv[0];
     ifnone = RHASH_IFNONE(hash);
     if (FL_TEST(hash, HASH_PROC_DEFAULT)) {
 	if (argc == 0) return Qnil;
-	return rb_funcall(ifnone, id_yield, 2, hash, key);
+	args[0] = hash;
+	args[1] = argv[0];
+	return rb_funcallv(ifnone, id_yield, 2, args);
     }
     return ifnone;
 }
@@ -1172,7 +1184,7 @@ rb_hash_shift(VALUE hash)
 	    }
 	}
     }
-    return hash_default_value(hash, Qnil);
+    return rb_hash_default_value(hash, Qnil);
 }
 
 static int
@@ -2126,6 +2138,12 @@ hash_equal(VALUE hash1, VALUE hash2, int eql)
  *     h2 == h3   #=> true
  *     h3 == h4   #=> false
  *
+ *  The orders of each hashes are not compared.
+ *
+ *     h1 = { "a" => 1, "c" => 2 }
+ *     h2 = { "c" => 2, "a" => 1 }
+ *     h1 == h2   #=> true
+ *
  */
 
 static VALUE
@@ -2140,6 +2158,7 @@ rb_hash_equal(VALUE hash1, VALUE hash2)
  *
  *  Returns <code>true</code> if <i>hash</i> and <i>other</i> are
  *  both hashes with the same content.
+ *  The orders of each hashes are not compared.
  */
 
 static VALUE
@@ -2672,6 +2691,146 @@ rb_hash_any_p(VALUE hash)
     return ret;
 }
 
+/*
+ * call-seq:
+ *   hsh.dig(key, ...)                 -> object
+ *
+ * Extracts the nested hash value specified by the sequence of <i>key</i>
+ * objects.
+ *
+ *   h = { foo: {bar: {baz: 1}}}
+ *
+ *   h.dig(:foo, :bar, :baz)           #=> 1
+ *   h.dig(:foo, :zot)                 #=> nil
+ */
+
+VALUE
+rb_hash_dig(int argc, VALUE *argv, VALUE self)
+{
+    rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
+    self = rb_hash_aref(self, *argv);
+    if (!--argc) return self;
+    ++argv;
+    return rb_obj_dig(argc, argv, self, Qnil);
+}
+
+static int
+hash_le_i(VALUE key, VALUE value, VALUE arg)
+{
+    VALUE *args = (VALUE *)arg;
+    VALUE v = rb_hash_lookup2(args[0], key, Qundef);
+    if (v != Qundef && rb_equal(value, v)) return ST_CONTINUE;
+    args[1] = Qfalse;
+    return ST_STOP;
+}
+
+static VALUE
+hash_le(VALUE hash1, VALUE hash2)
+{
+    VALUE args[2];
+    args[0] = hash2;
+    args[1] = Qtrue;
+    rb_hash_foreach(hash1, hash_le_i, (VALUE)args);
+    return args[1];
+}
+
+/*
+ * call-seq:
+ *   hash <= other -> true or false
+ *
+ * Returns <code>true</code> if <i>hash</i> is subset of
+ * <i>other</i> or equals to <i>other</i>.
+ *
+ *    h1 = {a:1, b:2}
+ *    h2 = {a:1, b:2, c:3}
+ *    h1 <= h2   #=> true
+ *    h2 <= h1   #=> false
+ *    h1 <= h1   #=> true
+ */
+static VALUE
+rb_hash_le(VALUE hash, VALUE other)
+{
+    other = to_hash(other);
+    if (RHASH_SIZE(hash) > RHASH_SIZE(other)) return Qfalse;
+    return hash_le(hash, other);
+}
+
+/*
+ * call-seq:
+ *   hash < other -> true or false
+ *
+ * Returns <code>true</code> if <i>hash</i> is subset of
+ * <i>other</i>.
+ *
+ *    h1 = {a:1, b:2}
+ *    h2 = {a:1, b:2, c:3}
+ *    h1 < h2    #=> true
+ *    h2 < h1    #=> false
+ *    h1 < h1    #=> false
+ */
+static VALUE
+rb_hash_lt(VALUE hash, VALUE other)
+{
+    other = to_hash(other);
+    if (RHASH_SIZE(hash) >= RHASH_SIZE(other)) return Qfalse;
+    return hash_le(hash, other);
+}
+
+/*
+ * call-seq:
+ *   hash >= other -> true or false
+ *
+ * Returns <code>true</code> if <i>other</i> is subset of
+ * <i>hash</i> or equals to <i>hash</i>.
+ *
+ *    h1 = {a:1, b:2}
+ *    h2 = {a:1, b:2, c:3}
+ *    h1 >= h2   #=> false
+ *    h2 >= h1   #=> true
+ *    h1 >= h1   #=> true
+ */
+static VALUE
+rb_hash_ge(VALUE hash, VALUE other)
+{
+    other = to_hash(other);
+    if (RHASH_SIZE(hash) < RHASH_SIZE(other)) return Qfalse;
+    return hash_le(other, hash);
+}
+
+/*
+ * call-seq:
+ *   hash > other -> true or false
+ *
+ * Returns <code>true</code> if <i>other</i> is subset of
+ * <i>hash</i>.
+ *
+ *    h1 = {a:1, b:2}
+ *    h2 = {a:1, b:2, c:3}
+ *    h1 > h2    #=> false
+ *    h2 > h1    #=> true
+ *    h1 > h1    #=> false
+ */
+static VALUE
+rb_hash_gt(VALUE hash, VALUE other)
+{
+    other = to_hash(other);
+    if (RHASH_SIZE(hash) <= RHASH_SIZE(other)) return Qfalse;
+    return hash_le(other, hash);
+}
+
+static VALUE
+hash_proc_call(VALUE key, VALUE hash, int argc, const VALUE *argv, VALUE passed_proc)
+{
+    rb_check_arity(argc, 1, 1);
+    return rb_hash_aref(hash, *argv);
+}
+
+static VALUE
+rb_hash_to_proc(VALUE hash)
+{
+    return rb_func_proc_new(hash_proc_call, hash);
+}
+
 static int path_tainted = -1;
 
 static char **origenviron;
@@ -2796,6 +2955,7 @@ env_delete(VALUE obj, VALUE name)
 
 	ruby_setenv(nam, 0);
 	if (ENVMATCH(nam, PATH_ENV)) {
+	    RB_GC_GUARD(name);
 	    path_tainted = 0;
 	}
 	return value;
@@ -3131,6 +3291,7 @@ env_aset(VALUE obj, VALUE nm, VALUE val)
 
     ruby_setenv(name, value);
     if (ENVMATCH(name, PATH_ENV)) {
+	RB_GC_GUARD(nm);
 	if (OBJ_TAINTED(val)) {
 	    /* already tainted, no check */
 	    path_tainted = 1;
@@ -4036,6 +4197,7 @@ Init_Hash(void)
     rb_define_method(rb_cHash,"to_a", rb_hash_to_a, 0);
     rb_define_method(rb_cHash,"inspect", rb_hash_inspect, 0);
     rb_define_alias(rb_cHash, "to_s", "inspect");
+    rb_define_method(rb_cHash,"to_proc", rb_hash_to_proc, 0);
 
     rb_define_method(rb_cHash,"==", rb_hash_equal, 1);
     rb_define_method(rb_cHash,"[]", rb_hash_aref, 1);
@@ -4093,6 +4255,12 @@ Init_Hash(void)
     rb_define_method(rb_cHash,"compare_by_identity?", rb_hash_compare_by_id_p, 0);
 
     rb_define_method(rb_cHash, "any?", rb_hash_any_p, 0);
+    rb_define_method(rb_cHash, "dig", rb_hash_dig, -1);
+
+    rb_define_method(rb_cHash, "<=", rb_hash_le, 1);
+    rb_define_method(rb_cHash, "<", rb_hash_lt, 1);
+    rb_define_method(rb_cHash, ">=", rb_hash_ge, 1);
+    rb_define_method(rb_cHash, ">", rb_hash_gt, 1);
 
     /* Document-class: ENV
      *

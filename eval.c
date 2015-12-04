@@ -44,18 +44,15 @@ ID ruby_static_id_signo, ruby_static_id_status;
 int
 ruby_setup(void)
 {
-    static int initialized = 0;
     int state;
 
-    if (initialized)
+    if (GET_VM())
 	return 0;
-    initialized = 1;
 
     ruby_init_stack((void *)&state);
     Init_BareVM();
     Init_heap();
     Init_vm_objects();
-    Init_frozen_strings();
 
     PUSH_TAG();
     if ((state = EXEC_TAG()) == 0) {
@@ -226,7 +223,7 @@ ruby_cleanup(volatile int ex)
     /* unlock again if finalizer took mutexes. */
     rb_threadptr_unlock_all_locking_mutexes(GET_THREAD());
     TH_POP_TAG();
-    rb_thread_stop_timer_thread(1);
+    rb_thread_stop_timer_thread();
     ruby_vm_destruct(GET_VM());
     if (state) ruby_default_signal(state);
 
@@ -479,7 +476,7 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 {
     VALUE e;
     const char *file = 0;
-    volatile int line = 0;
+    int line;
     int nocause = 0;
 
     if (NIL_P(mesg)) {
@@ -496,8 +493,7 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
     }
     exc_setup_cause(mesg, cause);
 
-    file = rb_sourcefile();
-    if (file) line = rb_sourceline();
+    file = rb_source_loc(&line);
     if (file && !NIL_P(mesg)) {
 	VALUE at;
 	if (sysstack_error_p(mesg)) {
@@ -564,11 +560,7 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
     }
 
     if (tag != TAG_FATAL) {
-	if (RUBY_DTRACE_RAISE_ENABLED()) {
-	    RUBY_DTRACE_RAISE(rb_obj_classname(th->errinfo),
-			      rb_sourcefile(),
-			      rb_sourceline());
-	}
+	RUBY_DTRACE_HOOK(RAISE, rb_obj_classname(th->errinfo));
 	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, mesg);
     }
 }
@@ -1091,9 +1083,8 @@ rb_mod_prepend(int argc, VALUE *argv, VALUE module)
 static VALUE
 hidden_identity_hash_new(void)
 {
-    VALUE hash = rb_hash_new();
+    VALUE hash = rb_ident_hash_new();
 
-    rb_funcall(hash, rb_intern("compare_by_identity"), 0);
     RBASIC_CLEAR_CLASS(hash); /* hide from ObjectSpace */
     return hash;
 }
@@ -1293,7 +1284,6 @@ rb_mod_refine(VALUE module, VALUE klass)
 static VALUE
 mod_using(VALUE self, VALUE module)
 {
-    const rb_cref_t *cref = rb_vm_cref();
     rb_control_frame_t *prev_cfp = previous_frame(GET_THREAD());
 
     if (prev_frame_func()) {
@@ -1303,7 +1293,7 @@ mod_using(VALUE self, VALUE module)
     if (prev_cfp && prev_cfp->self != self) {
 	rb_raise(rb_eRuntimeError, "Module#using is not called on self");
     }
-    rb_using_module(cref, module);
+    rb_using_module(rb_vm_cref_replace_with_duplicated_cref(), module);
     return self;
 }
 
@@ -1436,7 +1426,7 @@ top_using(VALUE self, VALUE module)
     if (CREF_NEXT(cref) || (prev_cfp && rb_vm_frame_method_entry(prev_cfp))) {
 	rb_raise(rb_eRuntimeError, "main.using is permitted only at toplevel");
     }
-    rb_using_module(cref, module);
+    rb_using_module(rb_vm_cref_replace_with_duplicated_cref(), module);
     return self;
 }
 

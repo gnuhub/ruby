@@ -437,10 +437,14 @@ class TestRubyOptions < Test::Unit::TestCase
       }
       if File.respond_to? :symlink
         n2 = File.join(d, 't2')
-        File.symlink(n1, n2)
-        IO.popen([ruby, n2]) {|f|
-          assert_equal(n2, f.read)
-        }
+        begin
+          File.symlink(n1, n2)
+        rescue Errno::EACCES
+        else
+          IO.popen([ruby, n2]) {|f|
+            assert_equal(n2, f.read)
+          }
+        end
       end
       Dir.chdir(d) {
         n3 = '-e'
@@ -778,5 +782,39 @@ class TestRubyOptions < Test::Unit::TestCase
 
   def test_dump_insns_with_rflag
     assert_norun_with_rflag('--dump=insns')
+  end
+
+  def test_frozen_string_literal
+    all_assertions do |a|
+      [["disable", "false"], ["enable", "true"]].each do |opt, exp|
+        %W[frozen_string_literal frozen-string-literal].each do |arg|
+          key = "#{opt}=#{arg}"
+          a.for(key) do
+            assert_in_out_err(["--disable=gems", "--#{key}"], 'p("foo".frozen?)', [exp])
+          end
+        end
+      end
+      %W"disable enable".product(%W[false true]) do |opt, exp|
+        a.for("#{opt}=>#{exp}") do
+          assert_in_out_err(["-w", "--disable=gems", "--#{opt}=frozen-string-literal"], <<-"end;", [exp])
+            #-*- frozen-string-literal: #{exp} -*-
+            p("foo".frozen?)
+          end;
+        end
+      end
+    end
+  end
+
+  def test_frozen_string_literal_debug
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",  "--debug-frozen-string-literal"        ], '"foo" << "bar"', [], /created at/)
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",                                         ], '"foo" << "bar"', [], /created at/)
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",  "--debug-frozen-string-literal"        ], '"foo#{123}bar" << "bar"', [], /created at/)
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",                                         ], '"foo#{123}bar" << "bar"', [], /can\'t modify frozen String \(RuntimeError\)\n\z/)
+    assert_in_out_err(["--disable=gems", "--disable-frozen-string-literal", "--debug-frozen-string-literal"        ], '"foo" << "bar"', [], [])
+    assert_in_out_err(["--disable=gems", "--disable-frozen-string-literal",                                        ], '"foo" << "bar"', [], [])
+    assert_in_out_err(["--disable=gems",                                    "--debug-frozen-string-literal"        ], '"foo" << "bar"', [], [])
+    assert_in_out_err(["--disable=gems",                                                                           ], '"foo" << "bar"', [], [])
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",                                         ], '"foo" << "bar"', [], /created at/)
+    assert_in_out_err(["--disable=gems", "--enable-frozen-string-literal",                                         ], '"foo#{123}bar" << "bar"', [], /can\'t modify frozen String \(RuntimeError\)\n\z/)
   end
 end

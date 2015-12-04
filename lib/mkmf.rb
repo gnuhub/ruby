@@ -132,8 +132,6 @@ module MakeMakefile
   $mingw = /mingw/ =~ RUBY_PLATFORM
   $cygwin = /cygwin/ =~ RUBY_PLATFORM
   $netbsd = /netbsd/ =~ RUBY_PLATFORM
-  $os2 = /os2/ =~ RUBY_PLATFORM
-  $beos = /beos/ =~ RUBY_PLATFORM
   $haiku = /haiku/ =~ RUBY_PLATFORM
   $solaris = /solaris/ =~ RUBY_PLATFORM
   $universal = /universal/ =~ RUBY_PLATFORM
@@ -468,7 +466,7 @@ MSG
     end
   end
 
-  def link_command(ldflags, opt="", libpath=$LIBPATH|$DEFLIBPATH)
+  def link_command(ldflags, opt="", libpath=$DEFLIBPATH|$LIBPATH)
     librubyarg = $extmk ? $LIBRUBYARG_STATIC : "$(LIBRUBYARG)"
     conf = RbConfig::CONFIG.merge('hdrdir' => $hdrdir.quote,
                                   'src' => "#{CONFTEST_C}",
@@ -504,7 +502,7 @@ MSG
                      conf)
   end
 
-  def libpathflag(libpath=$LIBPATH|$DEFLIBPATH)
+  def libpathflag(libpath=$DEFLIBPATH|$LIBPATH)
     libpath.map{|x|
       case x
       when "$(topdir)", /\A\./
@@ -1923,9 +1921,9 @@ VPATH = #{vpath.join(CONFIG['PATH_SEPARATOR'])}
     end
     CONFIG.each do |key, var|
       next if /^abs_/ =~ key
-      next if /^(?:src|top|hdr)dir$/ =~ key
+      next if /^(?:src|top(?:_src)?|build|hdr)dir$/ =~ key
       next unless /dir$/ =~ key
-      mk << "#{key} = #{/^(?:top_src|build)dir$/ =~ key ? var : with_destdir(var)}\n"
+      mk << "#{key} = #{with_destdir(var)}\n"
     end
     if !$extmk and !$configure_args.has_key?('--ruby') and
         sep = config_string('BUILD_FILE_SEPARATOR')
@@ -2180,7 +2178,7 @@ RULES
   #
   def create_makefile(target, srcprefix = nil)
     $target = target
-    libpath = $LIBPATH|$DEFLIBPATH
+    libpath = $DEFLIBPATH|$LIBPATH
     message "creating Makefile\n"
     MakeMakefile.rm_f "#{CONFTEST}*"
     if CONFIG["DLEXT"] == $OBJEXT
@@ -2261,7 +2259,7 @@ RULES
     conf = yield(conf) if block_given?
     mfile.puts(conf)
     mfile.print "
-libpath = #{($LIBPATH|$DEFLIBPATH).join(" ")}
+libpath = #{($DEFLIBPATH|$LIBPATH).join(" ")}
 LIBPATH = #{libpath}
 DEFFILE = #{deffile}
 
@@ -2296,7 +2294,7 @@ CLEANLIBS     = #{n}.#{CONFIG['DLEXT']} #{config_string('cleanlibs') {|t| t.gsub
 CLEANOBJS     = *.#{$OBJEXT} #{config_string('cleanobjs') {|t| t.gsub(/\$\*/, "$(TARGET)#{deffile ? '-$(arch)': ''}")} if target} *.bak
 
 all:    #{$extout ? "install" : target ? "$(DLLIB)" : "Makefile"}
-static: $(STATIC_LIB)#{$extout ? " install-rb" : ""}
+static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" : ""}"}
 .PHONY: all install static install-so install-rb
 .PHONY: clean clean-so clean-static clean-rb
 "
@@ -2575,8 +2573,6 @@ MESSAGE
   case
   when $mswin
     $nmake = ?m if /nmake/i =~ make
-  when $bccwin
-    $nmake = ?b if /Borland/i =~ `#{make} -h`
   end
   $ignore_error = $nmake ? '' : ' 2> /dev/null || true'
 

@@ -287,8 +287,9 @@ rb_check_trusted_inline(VALUE obj)
 #endif
 void rb_check_copyable(VALUE obj, VALUE orig);
 
-#define OBJ_INIT_COPY(obj, orig) \
+#define RB_OBJ_INIT_COPY(obj, orig) \
     ((obj) != (orig) && (rb_obj_init_copy((obj), (orig)), 1))
+#define OBJ_INIT_COPY(obj, orig) RB_OBJ_INIT_COPY(obj, orig)
 
 /* eval.c */
 int rb_sourceline(void);
@@ -918,8 +919,10 @@ VALUE rb_mutex_unlock(VALUE mutex);
 VALUE rb_mutex_sleep(VALUE self, VALUE timeout);
 VALUE rb_mutex_synchronize(VALUE mutex, VALUE (*func)(VALUE arg), VALUE arg);
 /* time.c */
+void rb_timespec_now(struct timespec *);
 VALUE rb_time_new(time_t, long);
 VALUE rb_time_nano_new(time_t, long);
+VALUE rb_time_timespec_new(const struct timespec *, int);
 VALUE rb_time_num_new(VALUE, VALUE);
 struct timeval rb_time_interval(VALUE num);
 struct timeval rb_time_timeval(VALUE time);

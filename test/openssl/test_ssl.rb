@@ -10,9 +10,19 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     assert_equal(ctx.setup, nil)
   end
 
-  def test_options_defaults_to_OP_ALL
+  def test_ctx_setup_invalid
+    m = OpenSSL::SSL::SSLContext::METHODS.first
+    assert_raise_with_message(ArgumentError, /null/) {
+      OpenSSL::SSL::SSLContext.new("#{m}\0")
+    }
+    assert_raise_with_message(ArgumentError, /\u{ff33 ff33 ff2c}/) {
+      OpenSSL::SSL::SSLContext.new("\u{ff33 ff33 ff2c}")
+    }
+  end
+
+  def test_options_defaults_to_OP_ALL_on
     ctx = OpenSSL::SSL::SSLContext.new
-    assert_equal OpenSSL::SSL::OP_ALL, ctx.options
+    assert_equal(OpenSSL::SSL::OP_ALL, (OpenSSL::SSL::OP_ALL & ctx.options))
   end
 
   def test_setting_twice
@@ -33,7 +43,7 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     ctx = OpenSSL::SSL::SSLContext.new
     options = ctx.options
     ctx.setup
-    assert_raises(RuntimeError) do
+    assert_raise(RuntimeError) do
       ctx.options = options
     end
   end
@@ -166,6 +176,20 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
         }
       }
     }
+  end
+
+  def test_copy_stream
+    start_server(OpenSSL::SSL::VERIFY_NONE, true) do |server, port|
+      server_connect(port) do |ssl|
+        IO.pipe do |r, w|
+          str = "hello world\n"
+          w.write(str)
+          IO.copy_stream(r, ssl, str.bytesize)
+          IO.copy_stream(ssl, w, str.bytesize)
+          assert_equal str, r.read(str.bytesize)
+        end
+      end
+    end
   end
 
   def test_client_auth_failure
@@ -405,7 +429,7 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
         assert_raise_with_message(sslerr,msg){ssl.post_connection_check("localhost.localdomain")}
       }
     }
-  end
+  end if OpenSSL::ExtConfig::TLS_DH_anon_WITH_AES_256_GCM_SHA384
 
   def test_post_connection_check
     sslerr = OpenSSL::SSL::SSLError
@@ -707,12 +731,12 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
     s1 = OpenSSL::SSL::SSLSocket.new(sock1, ctx1)
     s1.hostname = hostname
     t = Thread.new {
-      assert_raises(OpenSSL::SSL::SSLError) do
+      assert_raise(OpenSSL::SSL::SSLError) do
         s1.connect
       end
     }
 
-    assert_raises(ArgumentError) do
+    assert_raise(ArgumentError) do
       s2.accept
     end
 
@@ -902,7 +926,7 @@ class OpenSSL::TestSSL < OpenSSL::SSLTestCase
   # that has been marked as forbidden, therefore either of these may be raised
   HANDSHAKE_ERRORS = [OpenSSL::SSL::SSLError, Errno::ECONNRESET]
 
-if OpenSSL::SSL::SSLContext::METHODS.include? :TLSv1
+if OpenSSL::SSL::SSLContext::METHODS.include?(:TLSv1) && OpenSSL::SSL::SSLContext::METHODS.include?(:SSLv3)
 
   def test_forbid_ssl_v3_for_client
     ctx_proc = Proc.new { |ctx| ctx.options = OpenSSL::SSL::OP_ALL | OpenSSL::SSL::OP_NO_SSLv3 }
@@ -1029,7 +1053,7 @@ if OpenSSL::OPENSSL_VERSION_NUMBER >= 0x10002000
     ctx_proc = Proc.new { |ctx|
       ctx.alpn_select_cb = -> (protocols) { nil }
     }
-    assert_raises(MiniTest::Assertion) do # minitest/assertion comes from `assert_join_threads`
+    assert_raise(MiniTest::Assertion) do # minitest/assertion comes from `assert_join_threads`
       start_server_version(:SSLv23, ctx_proc) { |server, port|
         ctx = OpenSSL::SSL::SSLContext.new
         ctx.alpn_protocols = ["http/1.1"]
@@ -1164,7 +1188,7 @@ end
     ssl = ctx ? OpenSSL::SSL::SSLSocket.new(sock, ctx) : OpenSSL::SSL::SSLSocket.new(sock)
     ssl.sync_close = true
     ssl.connect
-    yield ssl
+    yield ssl if block_given?
   ensure
     if ssl
       ssl.close

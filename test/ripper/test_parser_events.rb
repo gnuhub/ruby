@@ -24,6 +24,14 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
     parse(str, :compile_error) {|e, msg| return msg}
   end
 
+  def warning(str)
+    parse(str, :warning) {|e, *args| return args}
+  end
+
+  def warn(str)
+    parse(str, :warn) {|e, *args| return args}
+  end
+
   def test_program
     thru_program = false
     assert_equal '[void()]', parse('', :on_program) {thru_program = true}
@@ -346,12 +354,51 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
     }
     assert_equal true, thru_call
     assert_equal "[call(ref(self),.,foo)]", tree
+
+    thru_call = false
+    assert_nothing_raised {
+      tree = parse("self.foo()", :on_call) {thru_call = true}
+    }
+    assert_equal true, thru_call
+    assert_equal "[call(ref(self),.,foo,[])]", tree
+
     thru_call = false
     assert_nothing_raised(bug2233) {
       tree = parse("foo.()", :on_call) {thru_call = true}
     }
     assert_equal true, thru_call
     assert_equal "[call(vcall(foo),.,call,[])]", tree
+
+    thru_call = false
+    assert_nothing_raised {
+      tree = parse("self::foo", :on_call) {thru_call = true}
+    }
+    assert_equal true, thru_call
+    assert_equal "[call(ref(self),::,foo)]", tree
+
+    thru_call = false
+    assert_nothing_raised {
+      tree = parse("self::foo()", :on_call) {thru_call = true}
+    }
+    assert_equal true, thru_call
+    assert_equal "[call(ref(self),::,foo,[])]", tree
+
+    thru_call = false
+    assert_nothing_raised(bug2233) {
+      tree = parse("foo::()", :on_call) {thru_call = true}
+    }
+    assert_equal true, thru_call
+    assert_equal "[call(vcall(foo),::,call,[])]", tree
+
+    thru_call = false
+    tree = parse("self&.foo", :on_call) {thru_call = true}
+    assert_equal true, thru_call
+    assert_equal "[call(ref(self),&.,foo)]", tree
+
+    thru_call = false
+    tree = parse("self&.foo()", :on_call) {thru_call = true}
+    assert_equal true, thru_call
+    assert_equal "[call(ref(self),&.,foo,[])]", tree
   end
 
   def test_excessed_comma
@@ -517,8 +564,13 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
 
   def test_defs
     thru_defs = false
-    parse('def foo.bar; end', :on_defs) {thru_defs = true}
+    tree = parse('def foo.bar; end', :on_defs) {thru_defs = true}
     assert_equal true, thru_defs
+    assert_equal("[defs(vcall(foo),.,bar,[],bodystmt([void()]))]", tree)
+
+    thru_parse_error = false
+    tree = parse('def foo&.bar; end', :on_parse_error) {thru_parse_error = true}
+    assert_equal(true, thru_parse_error)
   end
 
   def test_do_block
@@ -686,44 +738,67 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
 
   def test_opassign
     thru_opassign = false
-    parse('a += b', :on_opassign) {thru_opassign = true}
+    tree = parse('a += b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),+=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a -= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),-=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a *= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),*=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a /= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),/=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a %= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),%=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a **= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),**=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a &= b', :on_opassign) {thru_opassign = true}
+    assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),&=,vcall(b))]", tree
+    thru_opassign = false
+    tree = parse('a |= b', :on_opassign) {thru_opassign = true}
+    assert_equal "[opassign(var_field(a),|=,vcall(b))]", tree
     assert_equal true, thru_opassign
     thru_opassign = false
-    parse('a -= b', :on_opassign) {thru_opassign = true}
+    tree = parse('a <<= b', :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),<<=,vcall(b))]", tree
     thru_opassign = false
-    parse('a *= b', :on_opassign) {thru_opassign = true}
+    tree = parse('a >>= b', :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),>>=,vcall(b))]", tree
     thru_opassign = false
-    parse('a /= b', :on_opassign) {thru_opassign = true}
+    tree = parse('a &&= b', :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),&&=,vcall(b))]", tree
     thru_opassign = false
-    parse('a %= b', :on_opassign) {thru_opassign = true}
+    tree = parse('a ||= b', :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(var_field(a),||=,vcall(b))]", tree
     thru_opassign = false
-    parse('a **= b', :on_opassign) {thru_opassign = true}
+    tree = parse('a::X ||= c 1', :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(const_path_field(vcall(a),X),||=,command(c,[1]))]", tree
+
     thru_opassign = false
-    parse('a &= b', :on_opassign) {thru_opassign = true}
+    tree = parse("self.foo += 1", :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
+    assert_equal "[opassign(field(ref(self),.,foo),+=,1)]", tree
+
     thru_opassign = false
-    parse('a |= b', :on_opassign) {thru_opassign = true}
+    tree = parse("self&.foo += 1", :on_opassign) {thru_opassign = true}
     assert_equal true, thru_opassign
-    thru_opassign = false
-    parse('a <<= b', :on_opassign) {thru_opassign = true}
-    assert_equal true, thru_opassign
-    thru_opassign = false
-    parse('a >>= b', :on_opassign) {thru_opassign = true}
-    assert_equal true, thru_opassign
-    thru_opassign = false
-    parse('a &&= b', :on_opassign) {thru_opassign = true}
-    assert_equal true, thru_opassign
-    thru_opassign = false
-    parse('a ||= b', :on_opassign) {thru_opassign = true}
-    assert_equal true, thru_opassign
-    thru_opassign = false
-    parse('a::X ||= c 1', :on_opassign) {thru_opassign = true}
-    assert_equal true, thru_opassign
+    assert_equal "[opassign(field(ref(self),&.,foo),+=,1)]", tree
   end
 
   def test_opassign_error
@@ -1231,5 +1306,24 @@ class TestRipper::ParserEvents < Test::Unit::TestCase
   def test_invalid_global_variable_name
     assert_equal("`$%' is not allowed as a global variable name", compile_error('$%'))
     assert_equal("`$' without identifiers is not allowed as a global variable name", compile_error('$'))
+  end
+
+  def test_warning_shadowing
+    fmt, *args = warning("x = 1; tap {|;x|}")
+    assert_match(/shadowing outer local variable/, fmt)
+    assert_equal("x", args[0])
+    assert_match(/x/, fmt % args)
+  end
+
+  def test_warning_ignored_magic_comment
+    fmt, *args = warning("1; #-*- frozen-string-literal: true -*-")
+    assert_match(/ignored after any tokens/, fmt)
+    assert_equal("frozen_string_literal", args[0])
+  end
+
+  def test_warn_cr_in_middle
+    fmt = nil
+    assert_warn("") {fmt, = warn("\r;")}
+    assert_match(/encountered/, fmt)
   end
 end if ripper_test

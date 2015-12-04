@@ -1178,7 +1178,7 @@ dependencies: []
       s.summary = 'summary'
       s.description = 'description'
       s.authors = 'author a', 'author b'
-      s.licenses = 'BSD'
+      s.licenses = 'BSD-2-Clause'
       s.files = 'lib/file.rb'
       s.test_files = 'test/file.rb'
       s.rdoc_options = '--foo'
@@ -1724,6 +1724,8 @@ dependencies: []
     class << Gem
       alias orig_default_ext_dir_for default_ext_dir_for
 
+      remove_method :default_ext_dir_for
+
       def Gem.default_ext_dir_for(base_dir)
         'elsewhere'
       end
@@ -2033,6 +2035,8 @@ dependencies: []
   def test_require_paths_default_ext_dir_for
     class << Gem
       send :alias_method, :orig_default_ext_dir_for, :default_ext_dir_for
+
+      remove_method :default_ext_dir_for
     end
 
     def Gem.default_ext_dir_for base_dir
@@ -2122,6 +2126,27 @@ dependencies: []
     assert_equal expected_so, @ext.to_fullpath("ext.#{ext}")
 
     assert_nil @ext.to_fullpath("notexist")
+  end
+
+  def test_fullpath_return_rb_extension_file_when_exist_the_same_name_file
+    ext_spec
+
+    @ext.require_paths = 'lib'
+
+    dir = File.join(@gemhome, 'gems', @ext.original_name, 'lib')
+    expected_rb = File.join(dir, 'code.rb')
+    FileUtils.mkdir_p dir
+    FileUtils.touch expected_rb
+
+    dir = @ext.extension_dir
+    ext = RbConfig::CONFIG["DLEXT"]
+    expected_so = File.join(dir, "code.#{ext}")
+    FileUtils.mkdir_p dir
+    FileUtils.touch expected_so
+
+    @ext.activate
+
+    assert_equal expected_rb, @ext.to_fullpath("code")
   end
 
   def test_require_already_activated
@@ -2608,12 +2633,14 @@ end
     end
   end
 
-  def test_validate_dependencies_open_ended
+  def test_validate_dependencies_duplicates
     util_setup_validate
 
     Dir.chdir @tempdir do
       @a1.add_runtime_dependency 'b', '~> 1.2'
       @a1.add_runtime_dependency 'b', '>= 1.2.3'
+      @a1.add_development_dependency 'c', '~> 1.2'
+      @a1.add_development_dependency 'c', '>= 1.2.3'
 
       use_ui @ui do
         e = assert_raises Gem::InvalidSpecificationException do
@@ -2623,6 +2650,8 @@ end
         expected = <<-EXPECTED
 duplicate dependency on b (>= 1.2.3), (~> 1.2) use:
     add_runtime_dependency 'b', '>= 1.2.3', '~> 1.2'
+duplicate dependency on c (>= 1.2.3, development), (~> 1.2) use:
+    add_development_dependency 'c', '>= 1.2.3', '~> 1.2'
         EXPECTED
 
         assert_equal expected, e.message
@@ -2631,6 +2660,36 @@ duplicate dependency on b (>= 1.2.3), (~> 1.2) use:
       assert_equal <<-EXPECTED, @ui.error
 #{w}:  See http://guides.rubygems.org/specification-reference/ for help
       EXPECTED
+    end
+  end
+
+  def test_validate_dependencies_allowed_duplicates
+    util_setup_validate
+
+    Dir.chdir @tempdir do
+      @a1.add_runtime_dependency 'b', '~> 1.2'
+      @a1.add_development_dependency 'b', '= 1.2.3'
+
+      use_ui @ui do
+        @a1.validate
+      end
+
+      assert_equal '', @ui.error, 'warning'
+    end
+  end
+
+  def test_validate_prerelease_dependencies_with_prerelease_version
+    util_setup_validate
+
+    Dir.chdir @tempdir do
+      @a1.version = '1.0.0.beta.1'
+      @a1.add_runtime_dependency 'b', '~> 1.2.0.beta.1'
+
+      use_ui @ui do
+        @a1.validate
+      end
+
+      assert_equal '', @ui.error, 'warning'
     end
   end
 
@@ -2832,8 +2891,62 @@ duplicate dependency on b (>= 1.2.3), (~> 1.2) use:
     end
 
     assert_match <<-warning, @ui.error
-WARNING:  licenses is empty, but is recommended.  Use a license abbreviation from:
-http://opensource.org/licenses/alphabetical
+WARNING:  licenses is empty, but is recommended.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
+    warning
+  end
+
+  def test_validate_license_values
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['BSD']
+      @a1.validate
+    end
+
+    assert_match <<-warning, @ui.error
+WARNING: license value 'BSD' is invalid.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
+    warning
+  end
+
+  def test_validate_license_values_plus
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+']
+      @a1.validate
+    end
+
+    assert_empty @ui.error
+  end
+
+  def test_validate_license_values_with
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+ WITH Autoconf-exception-2.0']
+      @a1.validate
+    end
+
+    assert_empty @ui.error
+  end
+
+  def test_validate_license_with_nonsense_suffix
+    util_setup_validate
+
+    use_ui @ui do
+      @a1.licenses = ['GPL-2.0+ FOO', 'GPL-2.0 FOO']
+      @a1.validate
+    end
+
+    assert_match <<-warning, @ui.error
+WARNING: license value 'GPL-2.0+ FOO' is invalid.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
+    warning
+    assert_match <<-warning, @ui.error
+WARNING: license value 'GPL-2.0 FOO' is invalid.  Use a license identifier from
+http://spdx.org/licenses or 'Nonstandard' for a nonstandard license.
     warning
   end
 

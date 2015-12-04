@@ -13,6 +13,7 @@
 #include "ruby/re.h"
 #include "ruby/util.h"
 #include "regint.h"
+#include "encindex.h"
 #include <ctype.h>
 
 VALUE rb_eRegexpError;
@@ -227,7 +228,7 @@ rb_memsearch_wchar(const unsigned char *xs, long m, const unsigned char *ys, lon
     const unsigned char *x = xs, x0 = *xs, *y = ys;
     enum {char_size = 2};
 
-    for (n -= m; n > 0; n -= char_size, y += char_size) {
+    for (n -= m; n >= 0; n -= char_size, y += char_size) {
 	if (x0 == *y && memcmp(x+1, y+1, m-1) == 0)
 	    return y - ys;
     }
@@ -240,7 +241,7 @@ rb_memsearch_qchar(const unsigned char *xs, long m, const unsigned char *ys, lon
     const unsigned char *x = xs, x0 = *xs, *y = ys;
     enum {char_size = 4};
 
-    for (n -= m; n > 0; n -= char_size, y += char_size) {
+    for (n -= m; n >= 0; n -= char_size, y += char_size) {
 	if (x0 == *y && memcmp(x+1, y+1, m-1) == 0)
 	    return y - ys;
     }
@@ -834,24 +835,24 @@ rb_reg_named_captures(VALUE re)
 
 static int
 onig_new_with_source(regex_t** reg, const UChar* pattern, const UChar* pattern_end,
-	  OnigOptionType option, OnigEncoding enc, const OnigSyntaxType* syntax,
-	  OnigErrorInfo* einfo, const char *sourcefile, int sourceline)
+		     OnigOptionType option, OnigEncoding enc, const OnigSyntaxType* syntax,
+		     OnigErrorInfo* einfo, const char *sourcefile, int sourceline)
 {
-  int r;
+    int r;
 
-  *reg = (regex_t* )malloc(sizeof(regex_t));
-  if (IS_NULL(*reg)) return ONIGERR_MEMORY;
+    *reg = (regex_t* )malloc(sizeof(regex_t));
+    if (IS_NULL(*reg)) return ONIGERR_MEMORY;
 
-  r = onig_reg_init(*reg, option, ONIGENC_CASE_FOLD_DEFAULT, enc, syntax);
-  if (r) goto err;
+    r = onig_reg_init(*reg, option, ONIGENC_CASE_FOLD_DEFAULT, enc, syntax);
+    if (r) goto err;
 
-  r = onig_compile(*reg, pattern, pattern_end, einfo, sourcefile, sourceline);
-  if (r) {
-  err:
-    onig_free(*reg);
-    *reg = NULL;
-  }
-  return r;
+    r = onig_compile(*reg, pattern, pattern_end, einfo, sourcefile, sourceline);
+    if (r) {
+      err:
+	onig_free(*reg);
+	*reg = NULL;
+    }
+    return r;
 }
 
 static Regexp*
@@ -1520,7 +1521,7 @@ rb_reg_search0(VALUE re, VALUE str, long pos, int reverse, int set_backref_str)
 	if (err) rb_memerror();
     }
     else {
-	    FL_UNSET(match, FL_TAINT);
+	FL_UNSET(match, FL_TAINT);
     }
 
     if (set_backref_str) {

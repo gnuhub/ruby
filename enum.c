@@ -1192,6 +1192,7 @@ nmin_filter(struct nmin_data *data)
     long numelts;
 
     long left, right;
+    long store_index;
 
     long i, j;
 
@@ -1217,7 +1218,6 @@ nmin_filter(struct nmin_data *data)
 
     while (1) {
 	long pivot_index = left + (right-left)/2;
-	long store_index;
 	long num_pivots = 1;
 
 	SWAP(pivot_index, right);
@@ -1261,9 +1261,9 @@ nmin_filter(struct nmin_data *data)
 #undef GETPTR
 #undef SWAP
 
+    data->limit = RARRAY_PTR(data->buf)[store_index*eltsize]; /* the last pivot */
     data->curlen = data->n;
     rb_ary_resize(data->buf, data->n * eltsize);
-    data->limit = RARRAY_PTR(data->buf)[(data->n-1)*eltsize];
 }
 
 static VALUE
@@ -1283,7 +1283,7 @@ nmin_i(VALUE i, VALUE *_data, int argc, VALUE *argv)
         int c = data->cmpfunc(&cmpv, &data->limit, data);
         if (data->rev)
             c = -c;
-        if (c > 0)
+        if (c >= 0)
             return Qnil;
     }
 
@@ -2454,6 +2454,10 @@ zip_i(RB_BLOCK_CALL_FUNC_ARGLIST(val, memoval))
  *     [1, 2].zip(a, b)         #=> [[1, 4, 7], [2, 5, 8]]
  *     a.zip([1, 2], [8])       #=> [[4, 1, 8], [5, 2, nil], [6, nil, nil]]
  *
+ *     c = []
+ *     a.zip(b) { |x, y| c << x + y }  #=> nil
+ *     c                               #=> [11, 13, 15]
+ *
  */
 
 static VALUE
@@ -2479,8 +2483,8 @@ enum_zip(int argc, VALUE *argv, VALUE obj)
 	CONST_ID(conv, "to_enum");
 	for (i=0; i<argc; i++) {
 	    if (!rb_respond_to(argv[i], id_each)) {
-                rb_raise(rb_eTypeError, "wrong argument type %s (must respond to :each)",
-                    rb_obj_classname(argv[i]));
+		rb_raise(rb_eTypeError, "wrong argument type %"PRIsVALUE" (must respond to :each)",
+			 rb_obj_class(argv[i]));
             }
 	    argv[i] = rb_funcall(argv[i], conv, 1, ID2SYM(id_each));
 	}

@@ -64,6 +64,8 @@ y.tab.c
 /config.status.lineno
 /configure
 /coverage/simplecov
+/coverage/simplecov-html
+/coverage/doclie
 /coverage/.last_run.json
 /coverage/.resultset.json*
 /coverage/assets
@@ -98,6 +100,8 @@ y.tab.c
 /riscos
 /rubicon
 /ruby
+/ruby-runner
+/ruby-runner.c
 /ruby-man.rd.gz
 /sizes.c
 /test.rb

@@ -20,6 +20,28 @@
 #define VM_CHECK_MODE 0
 #endif
 
+/**
+ * VM Debug Level
+ *
+ * debug level:
+ *  0: no debug output
+ *  1: show instruction name
+ *  2: show stack frame when control stack frame is changed
+ *  3: show stack status
+ *  4: show register
+ *  5:
+ * 10: gc check
+ */
+
+#ifndef VMDEBUG
+#define VMDEBUG 0
+#endif
+
+#if 0
+#undef  VMDEBUG
+#define VMDEBUG 3
+#endif
+
 #if VM_CHECK_MODE > 0
 #define VM_ASSERT(expr) ( \
 	LIKELY(expr) ? (void)0 : \
@@ -52,10 +74,8 @@
 #ifdef _WIN32
 /*
  * TODO: object space independent st_table.
- * socklist needs st_table in rb_w32_sysinit(), before object space
- * initialization.
- * It is too early now to change st_hash_type, since it breaks binary
- * compatibility.
+ * socklist and conlist will be freed exit_handler(), after object
+ * space destruction.
  */
 #define ENABLE_VM_OBJSPACE 0
 #else
@@ -151,12 +171,16 @@ enum ruby_vm_throw_flags {
     VM_THROW_STATE_MASK = 0xff
 };
 
+/* forward declarations */
+struct rb_thread_struct;
+struct rb_control_frame_struct;
+
 /* iseq data type */
 typedef struct rb_compile_option_struct rb_compile_option_t;
 
 struct iseq_inline_cache_entry {
     rb_serial_t ic_serial;
-    rb_cref_t *ic_cref;
+    const rb_cref_t *ic_cref;
     union {
 	size_t index;
 	VALUE value;
@@ -171,15 +195,6 @@ union iseq_inline_storage_entry {
     struct iseq_inline_cache_entry cache;
 };
 
-/* to avoid warning */
-struct rb_thread_struct;
-struct rb_control_frame_struct;
-
-typedef struct rb_call_info_kw_arg_struct {
-    int keyword_len;
-    VALUE keywords[1];
-} rb_call_info_kw_arg_t;
-
 enum method_missing_reason {
     MISSING_NOENTRY   = 0x00,
     MISSING_PRIVATE   = 0x01,
@@ -190,16 +205,33 @@ enum method_missing_reason {
     MISSING_NONE      = 0x20
 };
 
-/* rb_call_info_t contains calling information including inline cache */
-typedef struct rb_call_info_struct {
+struct rb_call_info {
     /* fixed at compile time */
     ID mid;
-
     unsigned int flag;
     int orig_argc;
-    const rb_iseq_t *blockiseq;
-    const rb_call_info_kw_arg_t *kw_arg;
+};
 
+struct rb_call_info_kw_arg {
+    int keyword_len;
+    VALUE keywords[1];
+};
+
+struct rb_call_info_with_kwarg {
+    struct rb_call_info ci;
+    struct rb_call_info_kw_arg *kw_arg;
+};
+
+struct rb_calling_info {
+    struct rb_block_struct *blockptr;
+    VALUE recv;
+    int argc;
+};
+
+struct rb_call_cache;
+typedef VALUE (*vm_call_handler)(struct rb_thread_struct *th, struct rb_control_frame_struct *cfp, struct rb_calling_info *calling, const struct rb_call_info *ci, struct rb_call_cache *cc);
+
+struct rb_call_cache {
     /* inline cache: keys */
     rb_serial_t method_state;
     rb_serial_t class_serial;
@@ -207,19 +239,14 @@ typedef struct rb_call_info_struct {
     /* inline cache: values */
     const rb_callable_method_entry_t *me;
 
-    /* temporary values for method calling */
-    struct rb_block_struct *blockptr;
-    VALUE recv;
-    int argc;
+    vm_call_handler call;
+
     union {
-	int opt_pc; /* used by iseq */
 	unsigned int index; /* used by ivar */
 	enum method_missing_reason method_missing_reason; /* used by method_missing */
 	int inc_sp; /* used by cfunc */
     } aux;
-
-    VALUE (*call)(struct rb_thread_struct *th, struct rb_control_frame_struct *cfp, struct rb_call_info_struct *ci);
-} rb_call_info_t;
+};
 
 #if 1
 #define GetCoreDataFromValue(obj, type, ptr) do { \
@@ -342,33 +369,30 @@ struct rb_iseq_constant_body {
     struct rb_iseq_struct *local_iseq; /* local_iseq->flip_cnt can be modified */
 
     union iseq_inline_storage_entry *is_entries;
-    rb_call_info_t *callinfo_entries;
+    struct rb_call_info *ci_entries; /* struct rb_call_info ci_entries[ci_size];
+				      * struct rb_call_info_with_kwarg cikw_entries[ci_kw_size];
+				      * So that:
+				      * struct rb_call_info_with_kwarg *cikw_entries = &body->ci_entries[ci_size];
+				      */
+    struct rb_call_cache *cc_entries; /* size is ci_size = ci_kw_size */
+
     const VALUE mark_ary;     /* Array: includes operands which should be GC marked */
 
     unsigned int local_table_size;
     unsigned int is_size;
-    unsigned int callinfo_size;
+    unsigned int ci_size;
+    unsigned int ci_kw_size;
     unsigned int line_info_size;
-};
-
-struct rb_iseq_variable_body {
-    const VALUE coverage;     /* coverage array */
-
-    rb_num_t flip_cnt;
-
-    /* original iseq, before encoding
-     * used for debug/dump (TODO: union with compile_data) */
-    VALUE *iseq;
 };
 
 /* T_IMEMO/iseq */
 /* typedef rb_iseq_t is in method.h */
 struct rb_iseq_struct {
     VALUE flags;
-    struct iseq_compile_data *compile_data; /* used at compile time */
+    struct iseq_compile_data *compile_data_; /* used at compile time */
     struct rb_iseq_constant_body *body;
-    struct rb_iseq_variable_body *variable_body;
-    VALUE dummy2;
+    VALUE reserved1;
+    VALUE reserved2;
 };
 
 enum ruby_special_exceptions {
@@ -409,10 +433,9 @@ enum ruby_basic_operators {
 #define GetVMPtr(obj, ptr) \
   GetCoreDataFromValue((obj), rb_vm_t, (ptr))
 
-#if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
 struct rb_objspace;
+struct rb_objspace *rb_objspace_alloc(void);
 void rb_objspace_free(struct rb_objspace *);
-#endif
 
 typedef struct rb_hook_list_struct {
     struct rb_event_hook_struct *hooks;
@@ -476,9 +499,7 @@ typedef struct rb_vm_struct {
 
     VALUE defined_module_hash;
 
-#if defined(ENABLE_VM_OBJSPACE) && ENABLE_VM_OBJSPACE
     struct rb_objspace *objspace;
-#endif
 
     /*
      * @shyouhei notes that this is not for storing normal Ruby
@@ -593,12 +614,10 @@ struct rb_unblock_callback {
 
 struct rb_mutex_struct;
 
-struct rb_thread_struct;
 typedef struct rb_thread_list_struct{
     struct rb_thread_list_struct *next;
     struct rb_thread_struct *th;
 } rb_thread_list_t;
-
 
 typedef struct rb_ensure_entry {
     VALUE marker;
@@ -640,7 +659,7 @@ typedef struct rb_thread_struct {
     const rb_callable_method_entry_t *passed_bmethod_me;
 
     /* for cfunc */
-    rb_call_info_t *passed_ci;
+    struct rb_calling_info *calling;
 
     /* for load(true) */
     VALUE top_self;
@@ -788,6 +807,8 @@ VALUE rb_iseq_disasm(const rb_iseq_t *iseq);
 int rb_iseq_disasm_insn(VALUE str, const VALUE *iseqval, size_t pos, const rb_iseq_t *iseq, VALUE child);
 const char *ruby_node_name(int node);
 
+VALUE rb_iseq_coverage(const rb_iseq_t *iseq);
+
 RUBY_EXTERN VALUE rb_cISeq;
 RUBY_EXTERN VALUE rb_cRubyVM;
 RUBY_EXTERN VALUE rb_cEnv;
@@ -835,14 +856,16 @@ enum vm_check_match_type {
 #define VM_CHECKMATCH_TYPE_MASK   0x03
 #define VM_CHECKMATCH_ARRAY       0x04
 
-#define VM_CALL_ARGS_SPLAT      (0x01 << 1) /* m(*args) */
-#define VM_CALL_ARGS_BLOCKARG   (0x01 << 2) /* m(&block) */
-#define VM_CALL_FCALL           (0x01 << 3) /* m(...) */
-#define VM_CALL_VCALL           (0x01 << 4) /* m */
-#define VM_CALL_TAILCALL        (0x01 << 5) /* located at tail position */
-#define VM_CALL_SUPER           (0x01 << 6) /* super */
-#define VM_CALL_OPT_SEND        (0x01 << 7) /* internal flag */
-#define VM_CALL_ARGS_SIMPLE     (0x01 << 8) /* (ci->flag & (SPLAT|BLOCKARG)) && ci->blockiseq == NULL && ci->kw_arg == NULL */
+#define VM_CALL_ARGS_SPLAT      (0x01 << 0) /* m(*args) */
+#define VM_CALL_ARGS_BLOCKARG   (0x01 << 1) /* m(&block) */
+#define VM_CALL_FCALL           (0x01 << 2) /* m(...) */
+#define VM_CALL_VCALL           (0x01 << 3) /* m */
+#define VM_CALL_ARGS_SIMPLE     (0x01 << 4) /* (ci->flag & (SPLAT|BLOCKARG)) && blockiseq == NULL && ci->kw_arg == NULL */
+#define VM_CALL_BLOCKISEQ       (0x01 << 5) /* has blockiseq */
+#define VM_CALL_KWARG           (0x01 << 6) /* has kwarg */
+#define VM_CALL_TAILCALL        (0x01 << 7) /* located at tail position */
+#define VM_CALL_SUPER           (0x01 << 8) /* super */
+#define VM_CALL_OPT_SEND        (0x01 << 9) /* internal flag */
 
 enum vm_special_object_type {
     VM_SPECIAL_OBJECT_VMCORE = 1,
@@ -886,7 +909,8 @@ enum vm_svar_index {
 
 /* inline cache */
 typedef struct iseq_inline_cache_entry *IC;
-typedef rb_call_info_t *CALL_INFO;
+typedef struct rb_call_info *CALL_INFO;
+typedef struct rb_call_cache *CALL_CACHE;
 
 void rb_vm_change_state(void);
 
@@ -979,7 +1003,7 @@ VALUE rb_vm_call(rb_thread_t *th, VALUE recv, VALUE id, int argc,
 		 const VALUE *argv, const rb_callable_method_entry_t *me);
 
 void rb_thread_start_timer_thread(void);
-void rb_thread_stop_timer_thread(int);
+void rb_thread_stop_timer_thread(void);
 void rb_thread_reset_timer_thread(void);
 void rb_thread_wakeup_timer_thread(void);
 
@@ -1004,7 +1028,6 @@ rb_vm_living_threads_remove(rb_vm_t *vm, rb_thread_t *th)
     vm->living_thread_num--;
 }
 
-int ruby_thread_has_gvl_p(void);
 typedef int rb_backtrace_iter_func(void *, VALUE, int, VALUE);
 rb_control_frame_t *rb_vm_get_ruby_level_next_cfp(const rb_thread_t *th, const rb_control_frame_t *cfp);
 rb_control_frame_t *rb_vm_get_binding_creatable_next_cfp(const rb_thread_t *th, const rb_control_frame_t *cfp);
@@ -1052,18 +1075,20 @@ extern rb_event_flag_t ruby_vm_event_flags;
 #define OPT_CALL_CFUNC_WITHOUT_FRAME 0
 #endif
 
-static inline rb_thread_t *
-GET_THREAD(void)
-{
-    rb_thread_t *th = ruby_current_thread;
+#define GET_THREAD() vm_thread_with_frame(ruby_current_thread)
 #if OPT_CALL_CFUNC_WITHOUT_FRAME
+static inline rb_thread_t *
+vm_thread_with_frame(rb_thread_t *th)
+{
     if (UNLIKELY(th->passed_ci != 0)) {
 	void rb_vm_call_cfunc_push_frame(rb_thread_t *th);
 	rb_vm_call_cfunc_push_frame(th);
     }
-#endif
     return th;
 }
+#else
+#define vm_thread_with_frame(th) (th)
+#endif
 
 #define rb_thread_set_current_raw(th) (void)(ruby_current_thread = (th))
 #define rb_thread_set_current(th) do { \

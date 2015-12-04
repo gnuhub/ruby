@@ -201,13 +201,6 @@ rb_struct_members_m(VALUE obj)
     return rb_struct_s_members_m(rb_obj_class(obj));
 }
 
-NORETURN(static void not_a_member(ID id));
-static void
-not_a_member(ID id)
-{
-    rb_name_error(id, "`%"PRIsVALUE"' is not a struct member", QUOTE_ID(id));
-}
-
 VALUE
 rb_struct_getmember(VALUE obj, ID id)
 {
@@ -216,7 +209,7 @@ rb_struct_getmember(VALUE obj, ID id)
     if (i != -1) {
 	return RSTRUCT_GET(obj, i);
     }
-    not_a_member(id);
+    rb_name_err_raise("`%1$s' is not a struct member", obj, ID2SYM(id));
 
     UNREACHABLE;
 }
@@ -272,8 +265,8 @@ new_struct(VALUE name, VALUE super)
     ID id;
     name = rb_str_to_str(name);
     if (!rb_is_const_name(name)) {
-	rb_name_error_str(name, "identifier %"PRIsVALUE" needs to be constant",
-			  QUOTE(name));
+	rb_name_err_raise("identifier %1$s needs to be constant",
+			  super, name);
     }
     id = rb_to_id(name);
     if (rb_const_defined_at(super, id)) {
@@ -823,16 +816,57 @@ rb_struct_init_copy(VALUE copy, VALUE s)
     return copy;
 }
 
-static VALUE
-rb_struct_aref_sym(VALUE s, VALUE name)
+static int
+rb_struct_pos(VALUE s, VALUE *name)
 {
-    int pos = struct_member_pos(s, name);
-    if (pos != -1) {
-	return RSTRUCT_GET(s, pos);
-    }
-    rb_name_error_str(name, "no member '% "PRIsVALUE"' in struct", name);
+    long i;
+    VALUE idx = *name;
 
-    UNREACHABLE;
+    if (RB_TYPE_P(idx, T_SYMBOL)) {
+	return struct_member_pos(s, idx);
+    }
+    else if (RB_TYPE_P(idx, T_STRING)) {
+	idx = rb_check_symbol(name);
+	if (NIL_P(idx)) return -1;
+	return struct_member_pos(s, idx);
+    }
+    else {
+	long len;
+	i = NUM2LONG(idx);
+	len = RSTRUCT_LEN(s);
+	if (i < 0) {
+	    if (i + len < 0) {
+		*name = LONG2FIX(i);
+		return -1;
+	    }
+	    i += len;
+	}
+	else if (len <= i) {
+	    *name = LONG2FIX(i);
+	    return -1;
+	}
+	return (int)i;
+    }
+}
+
+NORETURN(static void invalid_struct_pos(VALUE s, VALUE idx));
+static void
+invalid_struct_pos(VALUE s, VALUE idx)
+{
+    if (FIXNUM_P(idx)) {
+	long i = FIX2INT(idx), len = RSTRUCT_LEN(s);
+	if (i < 0) {
+	    rb_raise(rb_eIndexError, "offset %ld too small for struct(size:%ld)",
+		     i, len);
+	}
+	else {
+	    rb_raise(rb_eIndexError, "offset %ld too large for struct(size:%ld)",
+		     i, len);
+	}
+    }
+    else {
+	rb_name_err_raise("no member '%1$s' in struct", s, idx);
+    }
 }
 
 /*
@@ -855,53 +889,18 @@ rb_struct_aref_sym(VALUE s, VALUE name)
 VALUE
 rb_struct_aref(VALUE s, VALUE idx)
 {
-    long i;
-
-    if (RB_TYPE_P(idx, T_SYMBOL)) {
-	return rb_struct_aref_sym(s, idx);
-    }
-    else if (RB_TYPE_P(idx, T_STRING)) {
-	ID id = rb_check_id(&idx);
-	if (!id) {
-	    rb_name_error_str(idx, "no member '%"PRIsVALUE"' in struct",
-			      QUOTE(idx));
-	}
-	return rb_struct_aref_sym(s, ID2SYM(id));
-    }
-
-    i = NUM2LONG(idx);
-    if (i < 0) i = RSTRUCT_LEN(s) + i;
-    if (i < 0)
-        rb_raise(rb_eIndexError, "offset %ld too small for struct(size:%ld)",
-		 i, RSTRUCT_LEN(s));
-    if (RSTRUCT_LEN(s) <= i)
-        rb_raise(rb_eIndexError, "offset %ld too large for struct(size:%ld)",
-		 i, RSTRUCT_LEN(s));
+    int i = rb_struct_pos(s, &idx);
+    if (i < 0) invalid_struct_pos(s, idx);
     return RSTRUCT_GET(s, i);
-}
-
-static VALUE
-rb_struct_aset_sym(VALUE s, VALUE name, VALUE val)
-{
-    int pos = struct_member_pos(s, name);
-    if (pos != -1) {
-	rb_struct_modify(s);
-	RSTRUCT_SET(s, pos, val);
-	return val;
-    }
-
-    rb_name_error_str(name, "no member '% "PRIsVALUE"' in struct", name);
-
-    UNREACHABLE;
 }
 
 /*
  *  call-seq:
- *     struct[name]  = obj    -> obj
- *     struct[index] = obj    -> obj
+ *     struct[member] = obj    -> obj
+ *     struct[index]  = obj    -> obj
  *
  *  Attribute Assignment---Sets the value of the given struct +member+ or
- *  the member at the given +index+.  Raises NameError if the +name+ does not
+ *  the member at the given +index+.  Raises NameError if the +member+ does not
  *  exist and IndexError if the +index+ is out of range.
  *
  *     Customer = Struct.new(:name, :address, :zip)
@@ -917,33 +916,28 @@ rb_struct_aset_sym(VALUE s, VALUE name, VALUE val)
 VALUE
 rb_struct_aset(VALUE s, VALUE idx, VALUE val)
 {
-    long i;
-
-    if (RB_TYPE_P(idx, T_SYMBOL)) {
-	return rb_struct_aset_sym(s, idx, val);
-    }
-    if (RB_TYPE_P(idx, T_STRING)) {
-	ID id = rb_check_id(&idx);
-	if (!id) {
-	    rb_name_error_str(idx, "no member '%"PRIsVALUE"' in struct",
-			      QUOTE(idx));
-	}
-	return rb_struct_aset_sym(s, ID2SYM(id), val);
-    }
-
-    i = NUM2LONG(idx);
-    if (i < 0) i = RSTRUCT_LEN(s) + i;
-    if (i < 0) {
-        rb_raise(rb_eIndexError, "offset %ld too small for struct(size:%ld)",
-		 i, RSTRUCT_LEN(s));
-    }
-    if (RSTRUCT_LEN(s) <= i) {
-        rb_raise(rb_eIndexError, "offset %ld too large for struct(size:%ld)",
-		 i, RSTRUCT_LEN(s));
-    }
+    int i = rb_struct_pos(s, &idx);
+    if (i < 0) invalid_struct_pos(s, idx);
     rb_struct_modify(s);
     RSTRUCT_SET(s, i, val);
     return val;
+}
+
+FUNC_MINIMIZED(VALUE rb_struct_lookup(VALUE s, VALUE idx));
+NOINLINE(static VALUE rb_struct_lookup_default(VALUE s, VALUE idx, VALUE notfound));
+
+VALUE
+rb_struct_lookup(VALUE s, VALUE idx)
+{
+    return rb_struct_lookup_default(s, idx, Qnil);
+}
+
+static VALUE
+rb_struct_lookup_default(VALUE s, VALUE idx, VALUE notfound)
+{
+    int i = rb_struct_pos(s, &idx);
+    if (i < 0) return notfound;
+    return RSTRUCT_GET(s, i);
 }
 
 static VALUE
@@ -1133,6 +1127,30 @@ rb_struct_size(VALUE s)
 }
 
 /*
+ * call-seq:
+ *   struct.dig(key, ...)              -> object
+ *
+ * Extracts the nested struct value specified by the sequence of <i>key</i>
+ * objects.
+ *
+ *   klass = Struct.new(:a)
+ *   o = klass.new(klass.new({b: [1, 2, 3]}))
+ *
+ *   o.dig(:a, :a, :b, 0)              #=> 1
+ *   o.dig(:b, 0)                      #=> nil
+ */
+
+static VALUE
+rb_struct_dig(int argc, VALUE *argv, VALUE self)
+{
+    rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
+    self = rb_struct_lookup(self, *argv);
+    if (!--argc) return self;
+    ++argv;
+    return rb_obj_dig(argc, argv, self, Qnil);
+}
+
+/*
  *  A Struct is a convenient way to bundle a number of attributes together,
  *  using accessor methods, without having to write an explicit class.
  *
@@ -1189,6 +1207,7 @@ InitVM_Struct(void)
     rb_define_method(rb_cStruct, "values_at", rb_struct_values_at, -1);
 
     rb_define_method(rb_cStruct, "members", rb_struct_members_m, 0);
+    rb_define_method(rb_cStruct, "dig", rb_struct_dig, -1);
 }
 
 #undef rb_intern

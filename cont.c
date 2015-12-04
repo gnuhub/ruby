@@ -893,6 +893,24 @@ cont_restore_0(rb_context_t *cont, VALUE *addr_in_prev_frame)
  *     Ron
  *     Max
  *
+ *  Also you can call callcc in other methods:
+ *
+ *     require "continuation"
+ *
+ *     def g
+ *       arr = [ "Freddie", "Herbie", "Ron", "Max", "Ringo" ]
+ *       cc = callcc { |cc| cc }
+ *       puts arr.shift
+ *       return cc, arr.size
+ *     end
+ *
+ *     def f
+ *       c, size = g
+ *       c.call(c) if size > 1
+ *     end
+ *
+ *     f
+ *
  *  This (somewhat contrived) example allows the inner loop to abandon
  *  processing early:
  *
@@ -1260,8 +1278,9 @@ rb_fiber_start(void)
 	th->errinfo = Qnil;
 	th->root_lep = rb_vm_ep_local_ep(proc->block.ep);
 	th->root_svar = Qfalse;
-
 	fib->status = RUNNING;
+
+	EXEC_EVENT_HOOK(th, RUBY_EVENT_FIBER_SWITCH, th->self, 0, 0, Qnil);
 	cont->value = rb_vm_invoke_proc(th, proc, argc, argv, 0);
     }
     TH_POP_TAG();
@@ -1450,6 +1469,8 @@ fiber_switch(rb_fiber_t *fib, int argc, const VALUE *argv, int is_resume)
 
     value = fiber_store(fib, th);
     RUBY_VM_CHECK_INTS(th);
+
+    EXEC_EVENT_HOOK(th, RUBY_EVENT_FIBER_SWITCH, th->self, 0, 0, Qnil);
 
     return value;
 }

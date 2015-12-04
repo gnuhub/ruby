@@ -50,7 +50,6 @@ elsif !File.chardev?(@null = "/dev/null")
 end
 
 def sysquote(x)
-  @quote ||= /os2/ =~ (CROSS_COMPILING || RUBY_PLATFORM)
   @quote ? x.quote : x
 end
 
@@ -244,14 +243,7 @@ def extmake(target)
     end
     ok &&= File.open(makefile){|f| s = f.gets and !s[DUMMY_SIGNATURE]}
     ok = yield(ok) if block_given?
-    if ok
-      open(makefile, "r+b") do |f|
-        s = f.read.sub!(/^(static:)\s(?!all\b).*/, '\1 all') or break
-        f.rewind
-        f.print(s)
-        f.truncate(f.pos)
-      end unless $static
-    else
+    unless ok
       atomic_write_open(makefile) do |f|
         f.puts "# " + DUMMY_SIGNATURE
 	f.print(*dummy_makefile(CONFIG["srcdir"]))
@@ -376,6 +368,9 @@ def parse_args()
     end
     opts.on('--gnumake=yes|no', true) do |v|
       $gnumake = v
+    end
+    opts.on('--extflags=FLAGS') do |v|
+      $extflags = v || ""
     end
   end
   begin
@@ -621,9 +616,6 @@ void Init_ext(void)\n{\n#$extinit}
     open(extinit.c, "w") {|fe| fe.print src}
   end
 
-  if RUBY_PLATFORM =~ /beos/
-    $extflags.delete("-L/usr/local/lib")
-  end
   $extpath.delete("$(topdir)")
   $extflags = libpathflag($extpath) << " " << $extflags.strip
   conf = [
@@ -711,6 +703,7 @@ if $configure_only and $command_output
     end
     submakeopts << 'EXTLDFLAGS="$(EXTLDFLAGS)"'
     submakeopts << 'UPDATE_LIBRARIES="$(UPDATE_LIBRARIES)"'
+    submakeopts << 'SHOWFLAGS='
     mf.macro "SUBMAKEOPTS", submakeopts
     mf.puts
     targets = %w[all install static install-so install-rb clean distclean realclean]

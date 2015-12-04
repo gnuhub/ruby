@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2003  Michal Rokos <m.rokos@sh.cvut.cz>
  * Copyright (C) 2003  GOTOU Yuuzou <gotoyuzo@notwork.org>
@@ -672,9 +671,9 @@ ossl_ocspbres_add_status(VALUE self, VALUE cid, VALUE status,
     OCSP_BASICRESP *bs;
     OCSP_SINGLERESP *single;
     OCSP_CERTID *id;
-    int st, rsn;
     ASN1_TIME *ths, *nxt, *rev;
-    int error, i, rstatus = 0;
+    int st, rsn, error, rstatus = 0;
+    long i;
     VALUE tmp;
 
     st = NUM2INT(status);
@@ -683,7 +682,7 @@ ossl_ocspbres_add_status(VALUE self, VALUE cid, VALUE status,
 	/* All ary's members should be X509Extension */
 	Check_Type(ext, T_ARRAY);
 	for (i = 0; i < RARRAY_LEN(ext); i++)
-	    OSSL_Check_Kind(RARRAY_PTR(ext)[i], cX509Ext);
+	    OSSL_Check_Kind(RARRAY_AREF(ext, i), cX509Ext);
     }
 
     error = 0;
@@ -712,7 +711,7 @@ ossl_ocspbres_add_status(VALUE self, VALUE cid, VALUE status,
 	sk_X509_EXTENSION_pop_free(single->singleExtensions, X509_EXTENSION_free);
 	single->singleExtensions = NULL;
 	for(i = 0; i < RARRAY_LEN(ext); i++){
-	    x509ext = DupX509ExtPtr(RARRAY_PTR(ext)[i]);
+	    x509ext = DupX509ExtPtr(RARRAY_AREF(ext, i));
 	    if(!OCSP_SINGLERESP_add_ext(single, x509ext, -1)){
 		X509_EXTENSION_free(x509ext);
 		error = 1;

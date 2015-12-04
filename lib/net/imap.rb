@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 #
 # = net/imap.rb
 #
@@ -933,7 +934,17 @@ module Net
     # messages.  Yields responses from the server during the IDLE.
     #
     # Use #idle_done() to leave IDLE.
-    def idle(&response_handler)
+    #
+    # If +timeout+ is given, this method returns after +timeout+ seconds passed.
+    # +timeout+ can be used for keep-alive.  For example, the following code
+    # checks the connection for each 60 seconds.
+    #
+    #   loop do
+    #     imap.idle(60) do |res|
+    #       ...
+    #     end
+    #   end
+    def idle(timeout = nil, &response_handler)
       raise LocalJumpError, "no block given" unless response_handler
 
       response = nil
@@ -945,7 +956,7 @@ module Net
         begin
           add_response_handler(response_handler)
           @idle_done_cond = new_cond
-          @idle_done_cond.wait
+          @idle_done_cond.wait(timeout)
           @idle_done_cond = nil
           if @receiver_thread_terminating
             raise Net::IMAP::Error, "connection closed"
@@ -1191,7 +1202,7 @@ module Net
     end
 
     def get_response
-      buff = ""
+      buff = String.new
       while true
         s = @sock.gets(CRLF)
         break unless s
@@ -2729,7 +2740,7 @@ module Net
       end
 
       def section
-        str = ""
+        str = String.new
         token = match(T_LBRA)
         str.concat(token.value)
         token = match(T_ATOM, T_NUMBER, T_RBRA)
@@ -3210,7 +3221,7 @@ module Net
       end
 
       def atom
-        result = ""
+        result = String.new
         while true
           token = lookahead
           if atom_token?(token)

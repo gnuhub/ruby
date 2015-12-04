@@ -1211,6 +1211,74 @@ class TestSetTraceFunc < Test::Unit::TestCase
     end
   end
 
+  class C11492
+    define_method(:foo_return){
+      return true
+    }
+    define_method(:foo_break){
+      break true
+    }
+  end
+
+  def test_define_method_on_return
+    # return
+    events = []
+    obj = C11492.new
+    TracePoint.new(:call, :return){|tp|
+      next unless target_thread?
+      events << [tp.event, tp.method_id]
+    }.enable{
+      obj.foo_return
+    }
+    assert_equal([[:call, :foo_return], [:return, :foo_return]], events, 'Bug #11492')
+
+    # break
+    events = []
+    obj = C11492.new
+    TracePoint.new(:call, :return){|tp|
+      next unless target_thread?
+      events << [tp.event, tp.method_id]
+    }.enable{
+      obj.foo_break
+    }
+    assert_equal([[:call, :foo_break], [:return, :foo_break]], events, 'Bug #11492')
+
+    # set_trace_func
+    # return
+    events = []
+    begin
+      set_trace_func(lambda{|event, file, lineno, mid, binding, klass|
+        next unless target_thread?
+        case event
+        when 'call', 'return'
+          events << [event, mid]
+        end
+      })
+      obj.foo_return
+      set_trace_func(nil)
+
+      assert_equal([['call', :foo_return], ['return', :foo_return]], events, 'Bug #11492')
+    ensure
+    end
+
+    # break
+    events = []
+    begin
+      set_trace_func(lambda{|event, file, lineno, mid, binding, klass|
+        next unless target_thread?
+        case event
+        when 'call', 'return'
+          events << [event, mid]
+        end
+      })
+      obj.foo_break
+      set_trace_func(nil)
+
+      assert_equal([['call', :foo_break], ['return', :foo_break]], events, 'Bug #11492')
+    ensure
+    end
+  end
+
   def test_recursive
     assert_in_out_err([], %q{\
       TracePoint.new(:c_call){|tp|
@@ -1348,5 +1416,56 @@ class TestSetTraceFunc < Test::Unit::TestCase
     }
 
     assert_equal([:call, :return], evs)
+  end
+
+  require 'fiber'
+  def test_fiber_switch
+    # test for resume/yield
+    evs = []
+    TracePoint.new(:fiber_switch){|tp|
+      next unless target_thread?
+      evs << tp.event
+    }.enable{
+      f = Fiber.new{
+        Fiber.yield
+        Fiber.yield
+        Fiber.yield
+      }
+      f.resume
+      f.resume
+      f.resume
+      f.resume
+      begin
+        f.resume
+      rescue FiberError
+      end
+    }
+    assert_equal 8, evs.size
+    evs.each{|ev|
+      assert_equal ev, :fiber_switch
+    }
+
+    # test for transfer
+    evs = []
+    TracePoint.new(:fiber_switch){|tp|
+      next unless target_thread?
+      evs << tp.event
+    }.enable{
+      f1 = f2 = nil
+      f1 = Fiber.new{
+        f2.transfer
+        f2.transfer
+        Fiber.yield :ok
+      }
+      f2 = Fiber.new{
+        f1.transfer
+        f1.transfer
+      }
+      assert_equal :ok, f1.resume
+    }
+    assert_equal 6, evs.size
+    evs.each{|ev|
+      assert_equal ev, :fiber_switch
+    }
   end
 end

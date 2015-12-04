@@ -1,4 +1,5 @@
 # -*- coding: us-ascii -*-
+# frozen_string_literal: true
 begin
   require 'openssl'
 rescue LoadError
@@ -55,6 +56,10 @@ module SecureRandom
         now = Process.clock_gettime(Process::CLOCK_REALTIME, :nanosecond)
         ary = [now, @pid, pid]
         OpenSSL::Random.random_add(ary.join("").to_s, 0.0)
+        seed = Random.raw_seed(16)
+        if (seed)
+          OpenSSL::Random.random_add(seed, 16)
+        end
         @pid = pid
       end
       return OpenSSL::Random.random_bytes(n)
@@ -223,6 +228,8 @@ module Random::Formatter
   #
   # The version 4 UUID is purely random (except the version).
   # It doesn't contain meaningful information such as MAC addresses, timestamps, etc.
+  #
+  # The result contains 122 random bits (15.25 random bytes).
   #
   # See RFC 4122 for details of UUID.
   #

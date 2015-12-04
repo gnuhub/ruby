@@ -767,6 +767,7 @@ class TestArray < Test::Unit::TestCase
 
     a5 = @cls[ a1, @cls[], a3 ]
     assert_equal(@cls[1, 2, 3, 4, 5, 6], a5.flatten)
+    assert_equal(@cls[1, 2, 3, 4, [5, 6]], a5.flatten(1))
     assert_equal(@cls[], @cls[].flatten)
     assert_equal(@cls[],
                  @cls[@cls[@cls[@cls[],@cls[]],@cls[@cls[]],@cls[]],@cls[@cls[@cls[]]]].flatten)
@@ -852,6 +853,28 @@ class TestArray < Test::Unit::TestCase
     end
     assert_instance_of(RuntimeError, e, '[ruby-dev:34798]')
     assert_match(/reentered/, e.message, '[ruby-dev:34798]')
+  end
+
+  def test_flatten_respond_to_missing
+    bug11465 = '[ruby-core:70460] [Bug #11465]'
+
+    obj = Class.new do
+      def respond_to_missing?(method, stuff)
+        return false if method == :to_ary
+        super
+      end
+
+      def method_missing(*args)
+        super
+      end
+    end.new
+
+    ex = nil
+    trace = TracePoint.new(:raise) do |tp|
+      ex = tp.raised_exception
+    end
+    trace.enable {[obj].flatten}
+    assert_nil(ex, bug11465)
   end
 
   def test_permutation_with_callcc
@@ -1520,6 +1543,8 @@ class TestArray < Test::Unit::TestCase
       [[:first_one, :ok], :not_ok].to_h
     }
     assert_equal "wrong element type Symbol at 1 (expected array)", e.message
+    array = [eval("class C\u{1f5ff}; self; end").new]
+    assert_raise_with_message(TypeError, /C\u{1f5ff}/) {array.to_h}
     e = assert_raise(ArgumentError) {
       [[:first_one, :ok], [1, 2], [:not_ok]].to_h
     }
@@ -2624,6 +2649,12 @@ class TestArray < Test::Unit::TestCase
         assert_raise(IndexError, ARGV[1]) {a[0, 0] = Array.new(0x1000)}
       end;
     end
+  end
+
+  def test_dig
+    h = @cls[@cls[{a: 1}], 0]
+    assert_equal(1, h.dig(0, 0, :a))
+    assert_nil(h.dig(1, 0))
   end
 
   private

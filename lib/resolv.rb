@@ -1,3 +1,5 @@
+# frozen_string_literal: true
+
 require 'socket'
 require 'timeout'
 require 'thread'
@@ -1426,7 +1428,7 @@ class Resolv
 
       class MessageEncoder # :nodoc:
         def initialize
-          @data = ''
+          @data = ''.dup
           @names = {}
           yield self
         end
@@ -1474,7 +1476,9 @@ class Resolv
               self.put_pack("n", 0xc000 | idx)
               return
             else
-              @names[domain] = @data.length
+              if @data.length < 0x4000
+                @names[domain] = @data.length
+              end
               self.put_label(d[i])
             end
           }

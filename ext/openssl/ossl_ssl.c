@@ -1,5 +1,4 @@
 /*
- * $Id$
  * 'OpenSSL for Ruby' project
  * Copyright (C) 2000-2002  GOTOU Yuuzou <gotoyuzo@notwork.org>
  * Copyright (C) 2001-2002  Michal Rokos <m.rokos@sh.cvut.cz>
@@ -29,8 +28,8 @@
 } while (0)
 
 VALUE mSSL;
-VALUE mSSLExtConfig;
-VALUE eSSLError;
+static VALUE mSSLExtConfig;
+static VALUE eSSLError;
 VALUE cSSLContext;
 VALUE cSSLSocket;
 
@@ -76,7 +75,7 @@ static VALUE eSSLErrorWaitWritable;
 #define ossl_ssl_set_tmp_dh(o,v)     rb_iv_set((o),"@tmp_dh",(v))
 #define ossl_ssl_set_tmp_ecdh(o,v)   rb_iv_set((o),"@tmp_ecdh",(v))
 
-ID ID_callback_state;
+static ID ID_callback_state;
 
 static VALUE sym_exception, sym_wait_readable, sym_wait_writable;
 
@@ -109,18 +108,21 @@ static const struct {
     OSSL_SSL_METHOD_ENTRY(SSLv2_server),
     OSSL_SSL_METHOD_ENTRY(SSLv2_client),
 #endif
+#if defined(HAVE_SSLV3_METHOD) && defined(HAVE_SSLV3_SERVER_METHOD) && \
+        defined(HAVE_SSLV3_CLIENT_METHOD)
     OSSL_SSL_METHOD_ENTRY(SSLv3),
     OSSL_SSL_METHOD_ENTRY(SSLv3_server),
     OSSL_SSL_METHOD_ENTRY(SSLv3_client),
+#endif
     OSSL_SSL_METHOD_ENTRY(SSLv23),
     OSSL_SSL_METHOD_ENTRY(SSLv23_server),
     OSSL_SSL_METHOD_ENTRY(SSLv23_client),
 #undef OSSL_SSL_METHOD_ENTRY
 };
 
-int ossl_ssl_ex_vcb_idx;
-int ossl_ssl_ex_store_p;
-int ossl_ssl_ex_ptr_idx;
+static int ossl_ssl_ex_vcb_idx;
+static int ossl_ssl_ex_store_p;
+static int ossl_ssl_ex_ptr_idx;
 
 static void
 ossl_sslctx_free(void *ptr)
@@ -174,13 +176,13 @@ ossl_sslctx_set_ssl_version(VALUE self, VALUE ssl_method)
 {
     SSL_METHOD *method = NULL;
     const char *s;
+    VALUE m = ssl_method;
     int i;
 
     SSL_CTX *ctx;
     if (RB_TYPE_P(ssl_method, T_SYMBOL))
-	s = rb_id2name(SYM2ID(ssl_method));
-    else
-	s =  StringValuePtr(ssl_method);
+	m = rb_sym2str(ssl_method);
+    s = StringValueCStr(m);
     for (i = 0; i < numberof(ossl_ssl_method_tab); i++) {
         if (strcmp(ossl_ssl_method_tab[i].name, s) == 0) {
             method = ossl_ssl_method_tab[i].func();
@@ -188,7 +190,7 @@ ossl_sslctx_set_ssl_version(VALUE self, VALUE ssl_method)
         }
     }
     if (!method) {
-        ossl_raise(rb_eArgError, "unknown SSL method `%s'.", s);
+        ossl_raise(rb_eArgError, "unknown SSL method `%"PRIsVALUE"'.", m);
     }
     GetSSLCTX(self, ctx);
     if (SSL_CTX_set_ssl_version(ctx, method) != 1) {
@@ -579,53 +581,58 @@ ssl_npn_advertise_cb(SSL *ssl, const unsigned char **out, unsigned int *outlen, 
 }
 
 static int
-ssl_npn_select_cb(SSL *s, unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg)
+ssl_npn_select_cb_common(VALUE cb, const unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen)
 {
-    int i = 0;
-    VALUE sslctx_obj, cb, protocols, selected;
-
-    sslctx_obj = (VALUE) arg;
-    cb = rb_iv_get(sslctx_obj, "@npn_select_cb");
-    protocols = rb_ary_new();
+    VALUE selected;
+    long len;
+    unsigned char l;
+    VALUE protocols = rb_ary_new();
 
     /* The format is len_1|proto_1|...|len_n|proto_n\0 */
-    while (in[i]) {
-	VALUE protocol = rb_str_new((const char *) &in[i + 1], in[i]);
+    while ((l = *in++) != '\0') {
+	VALUE protocol;
+	if (l > inlen) {
+	    ossl_raise(eSSLError, "Invalid protocol name list");
+	}
+	protocol = rb_str_new((const char *)in, l);
 	rb_ary_push(protocols, protocol);
-	i += in[i] + 1;
+	in += l;
+	inlen -= l;
     }
 
     selected = rb_funcall(cb, rb_intern("call"), 1, protocols);
     StringValue(selected);
-    *out = (unsigned char *) StringValuePtr(selected);
-    *outlen = RSTRING_LENINT(selected);
+    len = RSTRING_LEN(selected);
+    if (len < 1 || len >= 256) {
+	ossl_raise(eSSLError, "Selected protocol name must have length 1..255");
+    }
+    *out = (unsigned char *)RSTRING_PTR(selected);
+    *outlen = (unsigned char)len;
 
     return SSL_TLSEXT_ERR_OK;
+}
+
+static int
+ssl_npn_select_cb(SSL *s, unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg)
+{
+    VALUE sslctx_obj, cb;
+
+    sslctx_obj = (VALUE) arg;
+    cb = rb_iv_get(sslctx_obj, "@npn_select_cb");
+
+    return ssl_npn_select_cb_common(cb, (const unsigned char **)out, outlen, in, inlen);
 }
 
 #ifdef HAVE_SSL_CTX_SET_ALPN_SELECT_CB
 static int
 ssl_alpn_select_cb(SSL *ssl, const unsigned char **out, unsigned char *outlen, const unsigned char *in, unsigned int inlen, void *arg)
 {
-    int i = 0;
-    VALUE sslctx_obj, cb, protocols, selected;
+    VALUE sslctx_obj, cb;
 
     sslctx_obj = (VALUE) arg;
     cb = rb_iv_get(sslctx_obj, "@alpn_select_cb");
-    protocols = rb_ary_new();
 
-    /* The format is len_1|proto_1|...|len_n|proto_n\0 */
-    while (in[i]) {
-	VALUE protocol = rb_str_new((const char *) &in[i + 1], in[i]);
-	rb_ary_push(protocols, protocol);
-	i += in[i] + 1;
-    }
-
-    selected = rb_funcall(cb, rb_intern("call"), 1, protocols);
-    *out = (unsigned char *) StringValuePtr(selected);
-    *outlen = RSTRING_LENINT(selected);
-
-    return SSL_TLSEXT_ERR_OK;
+    return ssl_npn_select_cb_common(cb, out, outlen, in, inlen);
 }
 #endif
 
@@ -694,7 +701,8 @@ ossl_sslctx_setup(VALUE self)
     X509_STORE *store;
     EVP_PKEY *key = NULL;
     char *ca_path = NULL, *ca_file = NULL;
-    int i, verify_mode;
+    int verify_mode;
+    long i;
     VALUE val;
 
     if(OBJ_FROZEN(self)) return Qnil;
@@ -751,7 +759,7 @@ ossl_sslctx_setup(VALUE self)
     if(!NIL_P(val)){
 	if (RB_TYPE_P(val, T_ARRAY)) {
 	    for(i = 0; i < RARRAY_LEN(val); i++){
-		client_ca = GetX509CertPtr(RARRAY_PTR(val)[i]);
+		client_ca = GetX509CertPtr(RARRAY_AREF(val, i));
         	if (!SSL_CTX_add_client_CA(ctx, client_ca)){
 		    /* Copies X509_NAME => FREE it. */
         	    ossl_raise(eSSLError, "SSL_CTX_add_client_CA");
@@ -2097,6 +2105,12 @@ Init_ossl_ssl(void)
     rb_define_const(mSSLExtConfig, "HAVE_TLSEXT_HOST_NAME", Qtrue);
 #else
     rb_define_const(mSSLExtConfig, "HAVE_TLSEXT_HOST_NAME", Qfalse);
+#endif
+
+#ifdef TLS_DH_anon_WITH_AES_256_GCM_SHA384
+    rb_define_const(mSSLExtConfig, "TLS_DH_anon_WITH_AES_256_GCM_SHA384", Qtrue);
+#else
+    rb_define_const(mSSLExtConfig, "TLS_DH_anon_WITH_AES_256_GCM_SHA384", Qfalse);
 #endif
 
     /*

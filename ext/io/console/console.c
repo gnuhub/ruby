@@ -521,12 +521,14 @@ console_set_winsize(VALUE io, VALUE size)
     int newrow, newcol;
 #endif
     VALUE row, col, xpixel, ypixel;
+    const VALUE *sz;
     int fd;
 
     GetOpenFile(io, fptr);
     size = rb_Array(size);
-    rb_scan_args((int)RARRAY_LEN(size), RARRAY_PTR(size), "22",
-                &row, &col, &xpixel, &ypixel);
+    rb_check_arity(RARRAY_LENINT(size), 2, 4);
+    sz = RARRAY_CONST_PTR(size);
+    row = sz[0], col = sz[1], xpixel = sz[2], ypixel = sz[3];
     fd = GetWriteFD(fptr);
 #if defined TIOCSWINSZ
     ws.ws_row = ws.ws_col = ws.ws_xpixel = ws.ws_ypixel = 0;
@@ -539,8 +541,12 @@ console_set_winsize(VALUE io, VALUE size)
     if (!setwinsize(fd, &ws)) rb_sys_fail(0);
 #elif defined _WIN32
     wh = (HANDLE)rb_w32_get_osfhandle(fd);
-    newrow = (SHORT)NUM2UINT(row);
-    newcol = (SHORT)NUM2UINT(col);
+#define SET(m) new##m = NIL_P(m) ? 0 : (unsigned short)NUM2UINT(m)
+    SET(row);
+    SET(col);
+#undef SET
+    if (!NIL_P(xpixel)) (void)NUM2UINT(xpixel);
+    if (!NIL_P(ypixel)) (void)NUM2UINT(ypixel);
     if (!GetConsoleScreenBufferInfo(wh, &ws)) {
 	rb_syserr_fail(LAST_ERROR, "GetConsoleScreenBufferInfo");
     }
@@ -698,7 +704,6 @@ console_cursor_set(VALUE io, VALUE cpos)
     return console_goto(io, RARRAY_AREF(cpos, 0), RARRAY_AREF(cpos, 1));
 }
 
-#include "win32_vk.h"
 #include "win32_vk.inc"
 
 static VALUE

@@ -252,6 +252,12 @@ ruby_pc = @ruby_pc@
 $(ruby_pc):
 		@./config.status --file=$@:$(srcdir)/template/ruby.pc.in
 
+ruby-runner.c: template/ruby-runner.c.in
+		@./config.status --file=$@:$(srcdir)/template/$(@F).in
+
+ruby-runner$(EXEEXT): ruby-runner.c
+	$(Q) $(PURIFY) $(CC) $(CFLAGS) $(CPPFLAGS) -DRUBY_INSTALL_NAME=$(RUBY_INSTALL_NAME) $(LDFLAGS) $(LIBS) $(OUTFLAG)$@ ruby-runner.c
+
 $(RBCONFIG): $($(CROSS_COMPILING:no=)PREP)
 
 rbconfig.rb: $(RBCONFIG)
@@ -293,7 +299,7 @@ uncommon.mk: $(srcdir)/common.mk
 .PHONY: reconfig
 reconfig-args = $(srcdir)/$(CONFIGURE) $(configure_args)
 config.status-args = ./config.status --recheck
-reconfig-exec-0 = exec 3>&1; exit `exec 4>&1; { "$$@" 3>&- 4>&-; echo $$? 1>&4; } | fgrep -v '(cached)' 1>&3 3>&- 4>&-`
+reconfig-exec-0 = test -t 1 && tty=yes; exec 3>&1; exit `exec 4>&1; { CONFIGURE_TTY=$$tty "$$@" 3>&- 4>&-; echo $$? 1>&4; } | fgrep -v '(cached)' 1>&3 3>&- 4>&-`
 reconfig-exec-1 = set -x; "$$@"
 
 reconfig config.status:	$(srcdir)/$(CONFIGURE) $(srcdir)/enc/Makefile.in \
@@ -301,7 +307,7 @@ reconfig config.status:	$(srcdir)/$(CONFIGURE) $(srcdir)/enc/Makefile.in \
 	@PWD= MINIRUBY="$(MINIRUBY)"; export MINIRUBY; \
 	set $(SHELL) $($@-args); $(reconfig-exec-$(V))
 
-$(srcdir)/$(CONFIGURE): $(srcdir)/configure.in
+$(srcdir)/$(CONFIGURE): $(srcdir)/configure.in $(srcdir)/aclocal.m4
 	$(CHDIR) $(srcdir) && exec $(AUTOCONF) -o $(@F)
 
 incs: id.h
@@ -322,7 +328,7 @@ lex.c: defs/keywords
 	else \
 	  [ $(Q) ] && echo generating $@ || set -x; \
 	  gperf -C -P -p -j1 -i 1 -g -o -t -N rb_reserved_word -k1,3,$$ $? \
-	  | sed 's/(int)(long)&((\(struct stringpool_t\) *\*)0)->\(stringpool_[a-z0-9]*\)/offsetof(\1, \2)/g' \
+	  | sed 's/(long)&((\(struct stringpool_t\) *\*)0)->\(stringpool_[a-z0-9]*\)/offsetof(\1, \2)/g' \
 	  > $@.tmp && \
 	  $(MV) $@.tmp $@ && \
 	  $(CP) $? $(srcdir)/defs/lex.c.src && \
@@ -383,7 +389,7 @@ enc/jis/props.h: enc/jis/props.kwd
 .d.h:
 	@$(ECHO) translating probes $<
 	$(Q) $(DTRACE) -o $@.tmp -h -C $(INCFLAGS) -s $<
-	$(Q) sed -e 's/RUBY_/RUBY_DTRACE_/g' -e 's/PROBES_H_TMP/PROBES_H/g' -e 's/(char \*/(const char */g' -e 's/, char \*/, const char */g' $@.tmp > $@
+	$(Q) sed -e 's/RUBY_/RUBY_DTRACE_/g' -e 's/PROBES_H_TMP/RUBY_PROBES_H/' -e 's/(char \*/(const char */g' -e 's/, char \*/, const char */g' $@.tmp > $@
 	$(Q) $(RM) $@.tmp
 
 .dmyh.h:
@@ -484,16 +490,43 @@ update-rubyspec: update-mspec
 test-rubyspec-precheck:
 	@if [ ! -d $(srcdir)/spec/rubyspec ]; then echo No rubyspec here.  make update-rubyspec first.; exit 1; fi
 
-update-coverage:
+update-doclie:
+	@$(CHDIR) $(srcdir); \
+	if [ -d coverage/doclie ]; then \
+	  cd coverage/doclie; \
+	  echo updating doclie ...; \
+	  exec git fetch; \
+		exec git checkout $(DOCLIE_GIT_REF); \
+	else \
+	  echo retrieving doclie ...; \
+	  exec git clone --branch $(DOCLIE_GIT_REF) $(DOCLIE_GIT_URL) coverage/doclie; \
+	fi
+
+update-simplecov-html:
+	@$(CHDIR) $(srcdir); \
+	if [ -d coverage/simplecov-html ]; then \
+	  cd coverage/simplecov-html; \
+	  echo updating simplecov-html ...; \
+	  exec git fetch; \
+		exec git checkout $(SIMPLECOV_HTML_GIT_REF); \
+	else \
+	  echo retrieving simplecov-html ...; \
+	  exec git clone --branch $(SIMPLECOV_HTML_GIT_REF) $(SIMPLECOV_HTML_GIT_URL) coverage/simplecov-html; \
+	fi
+
+update-simplecov:
 	@$(CHDIR) $(srcdir); \
 	if [ -d coverage/simplecov ]; then \
 	  cd coverage/simplecov; \
 	  echo updating simplecov ...; \
-	  exec git pull; \
+	  exec git fetch; \
+		exec git checkout $(SIMPLECOV_GIT_REF); \
 	else \
 	  echo retrieving simplecov ...; \
-	  exec git clone $(SIMPLECOV_GIT_URL) coverage/simplecov; \
+	  exec git clone --branch $(SIMPLECOV_GIT_REF) $(SIMPLECOV_GIT_URL) coverage/simplecov; \
 	fi
+
+update-coverage: update-simplecov update-simplecov-html update-doclie
 
 INSNS	= opt_sc.inc optinsn.inc optunifs.inc insns.inc insns_info.inc \
 	  vmtc.inc vm.inc

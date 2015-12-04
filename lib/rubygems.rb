@@ -307,11 +307,10 @@ module Gem
   # package is not available as a gem, return nil.
 
   def self.datadir(gem_name)
-# TODO: deprecate and move to Gem::Specification
-#       and drop the extra ", gem_name" which is uselessly redundant
+# TODO: deprecate
     spec = @loaded_specs[gem_name]
     return nil if spec.nil?
-    File.join spec.full_gem_path, "data", gem_name
+    spec.datadir
   end
 
   ##
@@ -597,6 +596,9 @@ module Gem
 
     test_syck = ENV['TEST_SYCK']
 
+    # Only Ruby 1.8 and 1.9 have syck
+    test_syck = false unless /^1\./ =~ RUBY_VERSION
+
     unless test_syck
       begin
         gem 'psych', '>= 1.2.1'
@@ -777,6 +779,14 @@ module Gem
   rescue Errno::EACCES
     open path, 'rb' do |f|
       f.read
+    end
+  rescue Errno::ENOLCK # NFS
+    if Thread.main != Thread.current
+      raise
+    else
+      open path, 'rb' do |f|
+        f.read
+      end
     end
   end
 
@@ -1203,6 +1213,7 @@ module Gem
   autoload :DependencyList,     'rubygems/dependency_list'
   autoload :DependencyResolver, 'rubygems/resolver'
   autoload :Installer,          'rubygems/installer'
+  autoload :Licenses,           'rubygems/util/licenses'
   autoload :PathSupport,        'rubygems/path_support'
   autoload :Platform,           'rubygems/platform'
   autoload :RequestSet,         'rubygems/request_set'

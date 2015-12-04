@@ -29,34 +29,41 @@ VALUE rb_cSOCKSSocket;
 #endif
 
 int rsock_do_not_reverse_lookup = 1;
-static VALUE sym_exception, sym_wait_readable;
+static VALUE sym_wait_readable;
 
 void
 rsock_raise_socket_error(const char *reason, int error)
 {
 #ifdef EAI_SYSTEM
-    if (error == EAI_SYSTEM) rb_sys_fail(reason);
+    int e;
+    if (error == EAI_SYSTEM && (e = errno) != 0)
+	rb_syserr_fail(e, reason);
 #endif
     rb_raise(rb_eSocket, "%s: %s", reason, gai_strerror(error));
 }
+
+#ifdef _WIN32
+#define is_socket(fd) rb_w32_is_socket(fd)
+#else
+static int
+is_socket(int fd)
+{
+    struct stat sbuf;
+
+    if (fstat(fd, &sbuf) < 0)
+        rb_sys_fail("fstat(2)");
+    return S_ISSOCK(sbuf.st_mode);
+}
+#endif
 
 VALUE
 rsock_init_sock(VALUE sock, int fd)
 {
     rb_io_t *fp;
-#ifndef _WIN32
-    struct stat sbuf;
 
-    if (fstat(fd, &sbuf) < 0)
-        rb_sys_fail("fstat(2)");
     rb_update_max_fd(fd);
-    if (!S_ISSOCK(sbuf.st_mode))
+    if (!is_socket(fd))
         rb_raise(rb_eArgError, "not a socket file descriptor");
-#else
-    rb_update_max_fd(fd);
-    if (!rb_w32_is_socket(fd))
-        rb_raise(rb_eArgError, "not a socket file descriptor");
-#endif
 
     MakeOpenFile(sock, fp);
     fp->fd = fd;
@@ -198,24 +205,19 @@ rsock_s_recvfrom(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
 }
 
 VALUE
-rsock_s_recvfrom_nonblock(VALUE sock, int argc, VALUE *argv, enum sock_recv_type from)
+rsock_s_recvfrom_nonblock(VALUE sock, VALUE len, VALUE flg, VALUE str,
+			  VALUE ex, enum sock_recv_type from)
 {
     rb_io_t *fptr;
-    VALUE str;
     union_sockaddr buf;
     socklen_t alen = (socklen_t)sizeof buf;
-    VALUE len, flg;
     long buflen;
     long slen;
     int fd, flags;
     VALUE addr = Qnil;
-    VALUE opts = Qnil;
     socklen_t len0;
 
-    rb_scan_args(argc, argv, "12:", &len, &flg, &str, &opts);
-
-    if (flg == Qnil) flags = 0;
-    else             flags = NUM2INT(flg);
+    flags = NUM2INT(flg);
     buflen = NUM2INT(len);
     str = rsock_strbuf(str, buflen);
 
@@ -247,7 +249,7 @@ rsock_s_recvfrom_nonblock(VALUE sock, int argc, VALUE *argv, enum sock_recv_type
 #if defined(EWOULDBLOCK) && EWOULDBLOCK != EAGAIN
 	  case EWOULDBLOCK:
 #endif
-            if (rsock_opt_false_p(opts, sym_exception))
+            if (ex == Qfalse)
 		return sym_wait_readable;
             rb_readwrite_sys_fail(RB_IO_WAIT_READABLE, "recvfrom(2) would block");
 	}
@@ -356,8 +358,7 @@ rsock_socket(int domain, int type, int proto)
 
     fd = rsock_socket0(domain, type, proto);
     if (fd < 0) {
-       if (errno == EMFILE || errno == ENFILE) {
-           rb_gc();
+       if (rb_gc_for_fd(errno)) {
            fd = rsock_socket0(domain, type, proto);
        }
     }
@@ -547,13 +548,10 @@ cloexec_accept(int socket, struct sockaddr *address, socklen_t *address_len,
 }
 
 VALUE
-rsock_s_accept_nonblock(int argc, VALUE *argv, VALUE klass, rb_io_t *fptr,
+rsock_s_accept_nonblock(VALUE klass, VALUE ex, rb_io_t *fptr,
 			struct sockaddr *sockaddr, socklen_t *len)
 {
     int fd2;
-    VALUE opts = Qnil;
-
-    rb_scan_args(argc, argv, "0:", &opts);
 
     rb_io_set_nonblock(fptr);
     fd2 = cloexec_accept(fptr->fd, (struct sockaddr*)sockaddr, len, 1);
@@ -567,7 +565,7 @@ rsock_s_accept_nonblock(int argc, VALUE *argv, VALUE klass, rb_io_t *fptr,
 #if defined EPROTO
 	  case EPROTO:
 #endif
-            if (rsock_opt_false_p(opts, sym_exception))
+            if (ex == Qfalse)
 		return sym_wait_readable;
             rb_readwrite_sys_fail(RB_IO_WAIT_READABLE, "accept(2) would block");
 	}
@@ -607,6 +605,7 @@ rsock_s_accept(VALUE klass, int fd, struct sockaddr *sockaddr, socklen_t *len)
 	switch (errno) {
 	  case EMFILE:
 	  case ENFILE:
+	  case ENOMEM:
 	    if (retry) break;
 	    rb_gc();
 	    retry = 1;
@@ -676,6 +675,5 @@ rsock_init_socket_init(void)
     rsock_init_socket_constants();
 
 #undef rb_intern
-    sym_exception = ID2SYM(rb_intern("exception"));
     sym_wait_readable = ID2SYM(rb_intern("wait_readable"));
 }

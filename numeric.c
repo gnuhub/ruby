@@ -107,7 +107,7 @@ static VALUE fix_uminus(VALUE num);
 static VALUE fix_mul(VALUE x, VALUE y);
 static VALUE int_pow(long x, unsigned long y);
 
-static ID id_coerce, id_div;
+static ID id_coerce, id_div, id_divmod;
 #define id_to_i idTo_i
 #define id_eq  idEq
 #define id_cmp idCmp
@@ -295,7 +295,8 @@ do_coerce(VALUE *x, VALUE *y, int err)
     if (!RB_TYPE_P(ary, T_ARRAY) || RARRAY_LEN(ary) != 2) {
 	if (err) {
 	    rb_raise(rb_eTypeError, "coerce must return [x, y]");
-	} else if (!NIL_P(ary)) {
+	}
+	else if (!NIL_P(ary)) {
 	    rb_warn("Bad return value for #coerce, called by numerical comparison operators.");
 	    rb_warn("#coerce must return [x, y]. The next release will raise an error for this.");
 	}
@@ -464,7 +465,7 @@ num_modulo(VALUE x, VALUE y)
 {
     return rb_funcall(x, '-', 1,
 		      rb_funcall(y, '*', 1,
-				 rb_funcall(x, rb_intern("div"), 1, y)));
+				 rb_funcall(x, id_div, 1, y)));
 }
 
 /*
@@ -586,7 +587,7 @@ static VALUE
 num_abs(VALUE num)
 {
     if (negative_int_p(num)) {
-	return rb_funcall(num, rb_intern("-@"), 0);
+	return rb_funcall(num, idUMinus, 0);
     }
     return num;
 }
@@ -1051,7 +1052,7 @@ flo_divmod(VALUE x, VALUE y)
 	fy = RFLOAT_VALUE(y);
     }
     else {
-	return rb_num_coerce_bin(x, y, rb_intern("divmod"));
+	return rb_num_coerce_bin(x, y, id_divmod);
     }
     flodivmod(RFLOAT_VALUE(x), fy, &div, &mod);
     a = dbl2ival(div);
@@ -1072,24 +1073,25 @@ flo_divmod(VALUE x, VALUE y)
 static VALUE
 flo_pow(VALUE x, VALUE y)
 {
+    double dx, dy;
     if (RB_TYPE_P(y, T_FIXNUM)) {
-	return DBL2NUM(pow(RFLOAT_VALUE(x), (double)FIX2LONG(y)));
+	dx = RFLOAT_VALUE(x);
+	dy = (double)FIX2LONG(y);
     }
     else if (RB_TYPE_P(y, T_BIGNUM)) {
-	return DBL2NUM(pow(RFLOAT_VALUE(x), rb_big2dbl(y)));
+	dx = RFLOAT_VALUE(x);
+	dy = rb_big2dbl(y);
     }
     else if (RB_TYPE_P(y, T_FLOAT)) {
-	{
-	    double dx = RFLOAT_VALUE(x);
-	    double dy = RFLOAT_VALUE(y);
-	    if (dx < 0 && dy != round(dy))
-		return rb_funcall(rb_complex_raw1(x), rb_intern("**"), 1, y);
-	    return DBL2NUM(pow(dx, dy));
-	}
+	dx = RFLOAT_VALUE(x);
+	dy = RFLOAT_VALUE(y);
+	if (dx < 0 && dy != round(dy))
+	    return rb_funcall(rb_complex_raw1(x), idPow, 1, y);
     }
     else {
-	return rb_num_coerce_bin(x, y, rb_intern("**"));
+	return rb_num_coerce_bin(x, y, idPow);
     }
+    return DBL2NUM(pow(dx, dy));
 }
 
 /*
@@ -1319,7 +1321,7 @@ flo_ge(VALUE x, VALUE y)
 #endif
     }
     else {
-	return rb_num_coerce_relop(x, y, rb_intern(">="));
+	return rb_num_coerce_relop(x, y, idGE);
     }
 #if defined(_MSC_VER) && _MSC_VER < 1300
     if (isnan(a)) return Qfalse;
@@ -1393,7 +1395,7 @@ flo_le(VALUE x, VALUE y)
 #endif
     }
     else {
-	return rb_num_coerce_relop(x, y, rb_intern("<="));
+	return rb_num_coerce_relop(x, y, idLE);
     }
 #if defined(_MSC_VER) && _MSC_VER < 1300
     if (isnan(a)) return Qfalse;
@@ -1747,7 +1749,7 @@ int_round_0(VALUE num, int ndigits)
     h = rb_funcall(f, '/', 1, INT2FIX(2));
     r = rb_funcall(num, '%', 1, f);
     n = rb_funcall(num, '-', 1, r);
-    op = negative_int_p(num) ? rb_intern("<=") : '<';
+    op = negative_int_p(num) ? idLE : '<';
     if (!RTEST(rb_funcall(r, op, 1, h))) {
 	n = rb_funcall(n, '+', 1, f);
     }
@@ -3161,7 +3163,7 @@ fix_div(VALUE x, VALUE y)
 static VALUE
 fix_idiv(VALUE x, VALUE y)
 {
-    return fix_divide(x, y, rb_intern("div"));
+    return fix_divide(x, y, id_div);
 }
 
 /*
@@ -3227,7 +3229,7 @@ fix_divmod(VALUE x, VALUE y)
 	}
     }
     else {
-	return rb_num_coerce_bin(x, y, rb_intern("divmod"));
+	return rb_num_coerce_bin(x, y, id_divmod);
     }
 }
 
@@ -3300,7 +3302,7 @@ fix_pow(VALUE x, VALUE y)
 		return INT2FIX(-1);
 	}
 	if (b < 0)
-	    return rb_funcall(rb_rational_raw1(x), rb_intern("**"), 1, y);
+	    return rb_funcall(rb_rational_raw1(x), idPow, 1, y);
 
 	if (b == 0) return INT2FIX(1);
 	if (b == 1) return x;
@@ -3317,7 +3319,7 @@ fix_pow(VALUE x, VALUE y)
 	    else return INT2FIX(-1);
 	}
 	if (negative_int_p(y))
-	    return rb_funcall(rb_rational_raw1(x), rb_intern("**"), 1, y);
+	    return rb_funcall(rb_rational_raw1(x), idPow, 1, y);
 	if (a == 0) return INT2FIX(0);
 	x = rb_int2big(FIX2LONG(x));
 	return rb_big_pow(x, y);
@@ -3331,12 +3333,12 @@ fix_pow(VALUE x, VALUE y)
 	{
 	    double dy = RFLOAT_VALUE(y);
 	    if (a < 0 && dy != round(dy))
-		return rb_funcall(rb_complex_raw1(x), rb_intern("**"), 1, y);
+		return rb_funcall(rb_complex_raw1(x), idPow, 1, y);
 	    return DBL2NUM(pow((double)a, dy));
 	}
     }
     else {
-	return rb_num_coerce_bin(x, y, rb_intern("**"));
+	return rb_num_coerce_bin(x, y, idPow);
     }
 }
 
@@ -3445,7 +3447,7 @@ fix_ge(VALUE x, VALUE y)
 	return rel == INT2FIX(1) || rel == INT2FIX(0) ? Qtrue : Qfalse;
     }
     else {
-	return rb_num_coerce_relop(x, y, rb_intern(">="));
+	return rb_num_coerce_relop(x, y, idGE);
     }
 }
 
@@ -3497,7 +3499,7 @@ fix_le(VALUE x, VALUE y)
 	return rel == INT2FIX(-1) || rel == INT2FIX(0) ? Qtrue : Qfalse;
     }
     else {
-	return rb_num_coerce_relop(x, y, rb_intern("<="));
+	return rb_num_coerce_relop(x, y, idLE);
     }
 }
 
@@ -3555,7 +3557,7 @@ fix_and(VALUE x, VALUE y)
     }
 
     bit_coerce(&x, &y);
-    return rb_funcall(x, rb_intern("&"), 1, y);
+    return rb_funcall(x, '&', 1, y);
 }
 
 /*
@@ -3578,7 +3580,7 @@ fix_or(VALUE x, VALUE y)
     }
 
     bit_coerce(&x, &y);
-    return rb_funcall(x, rb_intern("|"), 1, y);
+    return rb_funcall(x, '|', 1, y);
 }
 
 /*
@@ -3601,7 +3603,7 @@ fix_xor(VALUE x, VALUE y)
     }
 
     bit_coerce(&x, &y);
-    return rb_funcall(x, rb_intern("^"), 1, y);
+    return rb_funcall(x, '^', 1, y);
 }
 
 static VALUE fix_lshift(long, unsigned long);
@@ -3948,7 +3950,7 @@ int_dotimes(VALUE num)
 
 	end = FIX2LONG(num);
 	for (i=0; i<end; i++) {
-	    rb_yield(LONG2FIX(i));
+	    rb_yield_1(LONG2FIX(i));
 	}
     }
     else {
@@ -4070,7 +4072,75 @@ fix_even_p(VALUE num)
  */
 
 /*
- *  The top-level number class.
+ * Document-class: Numeric
+ *
+ * Numeric is the class from which all higher-level numeric classes should inherit.
+ *
+ * Numeric allows instantiation of heap-allocated objects. Other core numeric classes such as
+ * Integer are implemented as immediates, which means that each Integer is a single immutable
+ * object which is always passed by value.
+ *
+ *   a = 1
+ *   puts 1.object_id == a.object_id   #=> true
+ *
+ * There can only ever be one instance of the integer +1+, for example. Ruby ensures this
+ * by preventing instantiation and duplication.
+ *
+ *   Integer.new(1)   #=> NoMethodError: undefined method `new' for Integer:Class
+ *   1.dup            #=> TypeError: can't dup Fixnum
+ *
+ * For this reason, Numeric should be used when defining other numeric classes.
+ *
+ * Classes which inherit from Numeric must implement +coerce+, which returns a two-member
+ * Array containing an object that has been coerced into an instance of the new class
+ * and +self+ (see #coerce).
+ *
+ * Inheriting classes should also implement arithmetic operator methods (<code>+</code>,
+ * <code>-</code>, <code>*</code> and <code>/</code>) and the <code><=></code> operator (see
+ * Comparable). These methods may rely on +coerce+ to ensure interoperability with
+ * instances of other numeric classes.
+ *
+ *   class Tally < Numeric
+ *     def initialize(string)
+ *       @string = string
+ *     end
+ *
+ *     def to_s
+ *       @string
+ *     end
+ *
+ *     def to_i
+ *       @string.size
+ *     end
+ *
+ *     def coerce(other)
+ *       [self.class.new('|' * other.to_i), self]
+ *     end
+ *
+ *     def <=>(other)
+ *       to_i <=> other.to_i
+ *     end
+ *
+ *     def +(other)
+ *       self.class.new('|' * (to_i + other.to_i))
+ *     end
+ *
+ *     def -(other)
+ *       self.class.new('|' * (to_i - other.to_i))
+ *     end
+ *
+ *     def *(other)
+ *       self.class.new('|' * (to_i * other.to_i))
+ *     end
+ *
+ *     def /(other)
+ *       self.class.new('|' * (to_i / other.to_i))
+ *     end
+ *   end
+ *
+ *   tally = Tally.new('||')
+ *   puts tally * 2            #=> "||||"
+ *   puts tally > 1            #=> true
  */
 void
 Init_Numeric(void)
@@ -4084,13 +4154,10 @@ Init_Numeric(void)
 #elif defined(_UNICOSMP)
     /* Turn off floating point exceptions for divide by zero, etc. */
     _set_Creg(0, 0);
-#elif defined(__BORLANDC__)
-    /* Turn off floating point exceptions for overflow, etc. */
-    _control87(MCW_EM, MCW_EM);
-    _control87(_control87(0,0),0x1FFF);
 #endif
     id_coerce = rb_intern("coerce");
     id_div = rb_intern("div");
+    id_divmod = rb_intern("divmod");
 
     rb_eZeroDivError = rb_define_class("ZeroDivisionError", rb_eStandardError);
     rb_eFloatDomainError = rb_define_class("FloatDomainError", rb_eRangeError);
@@ -4264,9 +4331,14 @@ Init_Numeric(void)
      */
     rb_define_const(rb_cFloat, "MAX_10_EXP", INT2FIX(DBL_MAX_10_EXP));
     /*
-     *	The smallest positive integer in a double-precision floating point.
+     *	The smallest positive normalized number in a double-precision floating point.
      *
      *	Usually defaults to 2.2250738585072014e-308.
+     *
+     *	If the platform supports denormalized numbers,
+     *	there are numbers between zero and Float::MIN.
+     *	0.0.next_float returns the smallest positive floating point number
+     *	including denormalized numbers.
      */
     rb_define_const(rb_cFloat, "MIN", DBL2NUM(DBL_MIN));
     /*
@@ -4277,7 +4349,7 @@ Init_Numeric(void)
     rb_define_const(rb_cFloat, "MAX", DBL2NUM(DBL_MAX));
     /*
      *	The difference between 1 and the smallest double-precision floating
-     *	point number.
+     *	point number greater than 1.
      *
      *	Usually defaults to 2.2204460492503131e-16.
      */

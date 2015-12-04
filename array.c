@@ -453,10 +453,7 @@ ary_alloc(VALUE klass)
 static VALUE
 empty_ary_alloc(VALUE klass)
 {
-    if (RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
-	RUBY_DTRACE_ARRAY_CREATE(0, rb_sourcefile(), rb_sourceline());
-    }
-
+    RUBY_DTRACE_CREATE_HOOK(ARRAY, 0);
     return ary_alloc(klass);
 }
 
@@ -472,9 +469,7 @@ ary_new(VALUE klass, long capa)
 	rb_raise(rb_eArgError, "array size too big");
     }
 
-    if (RUBY_DTRACE_ARRAY_CREATE_ENABLED()) {
-	RUBY_DTRACE_ARRAY_CREATE(capa, rb_sourcefile(), rb_sourceline());
-    }
+    RUBY_DTRACE_CREATE_HOOK(ARRAY, capa);
 
     ary = ary_alloc(klass);
     if (capa > RARRAY_EMBED_LEN_MAX) {
@@ -1307,7 +1302,7 @@ rb_ary_aref(int argc, const VALUE *argv, VALUE ary)
  *     a.at(-1)    #=> "e"
  */
 
-static VALUE
+VALUE
 rb_ary_at(VALUE ary, VALUE pos)
 {
     return rb_ary_entry(ary, NUM2LONG(pos));
@@ -2170,10 +2165,11 @@ rb_ary_to_h(VALUE ary)
     long i;
     VALUE hash = rb_hash_new();
     for (i=0; i<RARRAY_LEN(ary); i++) {
-	VALUE key_value_pair = rb_check_array_type(rb_ary_elt(ary, i));
+	const VALUE elt = rb_ary_elt(ary, i);
+	const VALUE key_value_pair = rb_check_array_type(elt);
 	if (NIL_P(key_value_pair)) {
-	    rb_raise(rb_eTypeError, "wrong element type %s at %ld (expected array)",
-		rb_builtin_class_name(rb_ary_elt(ary, i)), i);
+	    rb_raise(rb_eTypeError, "wrong element type %"PRIsVALUE" at %ld (expected array)",
+		     rb_obj_class(elt), i);
 	}
 	if (RARRAY_LEN(key_value_pair) != 2) {
 	    rb_raise(rb_eArgError, "wrong array length at %ld (expected 2, was %ld)",
@@ -2445,9 +2441,9 @@ sort_2(const void *ap, const void *bp, void *dummy)
  *  Comparisons for the sort will be done using the <code><=></code> operator
  *  or using an optional code block.
  *
- *  The block must implement a comparison between +a+ and +b+, and return
- *  +-1+, when +a+ follows +b+, +0+ when +a+ and +b+ are equivalent, or ++1+
- *  if +b+ follows +a+.
+ *  The block must implement a comparison between +a+ and +b+ and return
+ *  an integer less than 0 when +b+ follows +a+, +0+ when +a+ and +b+
+ *  are equivalent, or an integer greater than 0 when +a+ follows +b+.
  *
  *  See also Enumerable#sort_by.
  *
@@ -2526,9 +2522,9 @@ rb_ary_sort_bang(VALUE ary)
  *  Comparisons for the sort will be done using the <code><=></code> operator
  *  or using an optional code block.
  *
- *  The block must implement a comparison between +a+ and +b+, and return
- *  +-1+, when +a+ follows +b+, +0+ when +a+ and +b+ are equivalent, or ++1+
- *  if +b+ follows +a+.
+ *  The block must implement a comparison between +a+ and +b+ and return
+ *  an integer less than 0 when +b+ follows +a+, +0+ when +a+ and +b+
+ *  are equivalent, or an integer greater than 0 when +a+ follows +b+.
  *
  *
  *  See also Enumerable#sort_by.
@@ -2720,9 +2716,9 @@ rb_ary_sort_by_bang(VALUE ary)
  *  If no block is given, an Enumerator is returned instead.
  *
  *     a = [ "a", "b", "c", "d" ]
- *     a.collect { |x| x + "!" }        #=> ["a!", "b!", "c!", "d!"]
- *     a.map.with_index{ |x, i| x * i } #=> ["", "b", "cc", "ddd"]
- *     a                                #=> ["a", "b", "c", "d"]
+ *     a.collect { |x| x + "!" }         #=> ["a!", "b!", "c!", "d!"]
+ *     a.map.with_index { |x, i| x * i } #=> ["", "b", "cc", "ddd"]
+ *     a                                 #=> ["a", "b", "c", "d"]
  */
 
 static VALUE
@@ -3205,8 +3201,8 @@ ary_reject_bang(VALUE ary)
  *     ary.reject! { |item| block }  -> ary or nil
  *     ary.reject!                   -> Enumerator
  *
- *  Equivalent to Array#delete_if, deleting elements from +self+ for which the
- *  block evaluates to +true+, but returns +nil+ if no changes were made.
+ *  Deletes every element of +self+ for which the block evaluates to +true+,
+ *  if no changes were made returns +nil+.
  *
  *  The array may not be changed instantly every time the block is called.
  *
@@ -5179,7 +5175,7 @@ rb_ary_repeated_permutation(VALUE ary, VALUE num)
     }
     else {             /* this is the general case */
 	volatile VALUE t0;
-	long *p = ALLOCV_N(long, t0, r * sizeof(long));
+	long *p = ALLOCV_N(long, t0, r);
 	VALUE ary0 = ary_make_shared_copy(ary); /* private defensive copy of ary */
 	RBASIC_CLEAR_CLASS(ary0);
 
@@ -5423,7 +5419,7 @@ rb_ary_take(VALUE obj, VALUE n)
 
 /*
  *  call-seq:
- *     ary.take_while { |arr| block }  -> new_ary
+ *     ary.take_while { |obj| block }  -> new_ary
  *     ary.take_while                  -> Enumerator
  *
  *  Passes elements to the block until the block returns +nil+ or +false+, then
@@ -5482,7 +5478,7 @@ rb_ary_drop(VALUE ary, VALUE n)
 
 /*
  *  call-seq:
- *     ary.drop_while { |arr| block }   -> new_ary
+ *     ary.drop_while { |obj| block }   -> new_ary
  *     ary.drop_while                  -> Enumerator
  *
  *  Drops elements up to, but not including, the first element for which the
@@ -5533,6 +5529,29 @@ rb_ary_any_p(VALUE ary)
 	}
     }
     return Qfalse;
+}
+
+/*
+ * call-seq:
+ *   ary.dig(idx, ...)                 -> object
+ *
+ * Extracts the nested array value specified by the sequence of <i>idx</i>
+ * objects.
+ *
+ *   a = [[1, [2, 3]]]
+ *
+ *   a.dig(0, 1, 1)                    #=> 3
+ *   a.dig(0, 0, 0)                    #=> nil
+ */
+
+VALUE
+rb_ary_dig(int argc, VALUE *argv, VALUE self)
+{
+    rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
+    self = rb_ary_at(self, *argv);
+    if (!--argc) return self;
+    ++argv;
+    return rb_obj_dig(argc, argv, self, Qnil);
 }
 
 /*
@@ -5886,6 +5905,7 @@ Init_Array(void)
     rb_define_method(rb_cArray, "bsearch", rb_ary_bsearch, 0);
     rb_define_method(rb_cArray, "bsearch_index", rb_ary_bsearch_index, 0);
     rb_define_method(rb_cArray, "any?", rb_ary_any_p, 0);
+    rb_define_method(rb_cArray, "dig", rb_ary_dig, -1);
 
     id_cmp = rb_intern("<=>");
     id_random = rb_intern("random");

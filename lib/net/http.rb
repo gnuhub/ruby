@@ -641,7 +641,7 @@ module Net   #:nodoc:
       @close_on_empty_response = false
       @socket  = nil
       @started = false
-      @open_timeout = nil
+      @open_timeout = 60
       @read_timeout = 60
       @continue_timeout = nil
       @debug_output = nil
@@ -656,7 +656,6 @@ module Net   #:nodoc:
       @use_ssl = false
       @ssl_context = nil
       @ssl_session = nil
-      @enable_post_connection_check = true
       @sspi_enabled = false
       SSL_IVNAMES.each do |ivname|
         instance_variable_set ivname, nil
@@ -919,12 +918,12 @@ module Net   #:nodoc:
             @socket.write(buf)
             HTTPResponse.read_new(@socket).value
           end
+          # Server Name Indication (SNI) RFC 3546
+          s.hostname = @address if s.respond_to? :hostname=
           if @ssl_session and
              Process.clock_gettime(Process::CLOCK_REALTIME) < @ssl_session.time.to_f + @ssl_session.timeout
             s.session = @ssl_session if @ssl_session
           end
-          # Server Name Indication (SNI) RFC 3546
-          s.hostname = @address if s.respond_to? :hostname=
           if timeout = @open_timeout
             while true
               raise Net::OpenTimeout if timeout <= 0
@@ -1440,10 +1439,10 @@ module Net   #:nodoc:
 
           res.uri = req.uri
 
-          res.reading_body(@socket, req.response_body_permitted?) {
-            yield res if block_given?
-          }
           res
+        }
+        res.reading_body(@socket, req.response_body_permitted?) {
+          yield res if block_given?
         }
       rescue Net::OpenTimeout
         raise
@@ -1474,10 +1473,16 @@ module Net   #:nodoc:
     def begin_transport(req)
       if @socket.closed?
         connect
-      elsif @last_communicated && @last_communicated + @keep_alive_timeout < Process.clock_gettime(Process::CLOCK_MONOTONIC)
-        D 'Conn close because of keep_alive_timeout'
-        @socket.close
-        connect
+      elsif @last_communicated
+        if @last_communicated + @keep_alive_timeout < Process.clock_gettime(Process::CLOCK_MONOTONIC)
+          D 'Conn close because of keep_alive_timeout'
+          @socket.close
+          connect
+        elsif @socket.io.to_io.wait_readable(0) && @socket.eof?
+          D "Conn close because of EOF"
+          @socket.close
+          connect
+        end
       end
 
       if not req.response_body_permitted? and @close_on_empty_response
@@ -1579,4 +1584,3 @@ require 'net/http/responses'
 require 'net/http/proxy_delta'
 
 require 'net/http/backward'
-

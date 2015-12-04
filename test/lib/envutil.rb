@@ -3,12 +3,6 @@ require "open3"
 require "timeout"
 require_relative "find_executable"
 
-def File.mkfifo(fn)
-  raise NotImplementedError, "does not support fifo" if /mswin|mingw|bccwin/ =~ RUBY_PLATFORM
-  ret = system("mkfifo", fn)
-  raise NotImplementedError, "mkfifo fails" if !ret
-end
-
 module EnvUtil
   def rubybin
     if ruby = ENV["RUBY"]
@@ -73,12 +67,14 @@ module EnvUtil
       th_stderr = Thread.new { err_p.read } if capture_stderr && capture_stderr != :merge_to_stdout
       in_p.write stdin_data.to_str unless stdin_data.empty?
       in_p.close
-      unless (!th_stdout || th_stdout.join(timeout)) && (!th_stderr || th_stderr.join(timeout))
+      if (!th_stdout || th_stdout.join(timeout)) && (!th_stderr || th_stderr.join(timeout))
+        timeout_error = nil
+      else
         signals = Array(signal).select do |sig|
           DEFAULT_SIGNALS[sig.to_s] or
             DEFAULT_SIGNALS[Signal.signame(sig)] rescue false
         end
-        signals |= [:KILL]
+        signals |= [:ABRT, :KILL]
         case pgroup = opt[:pgroup]
         when 0, true
           pgroup = -pid
@@ -102,10 +98,6 @@ module EnvUtil
             end
           end
         end
-        if timeout_error
-          bt = caller_locations
-          raise timeout_error, "execution of #{bt.shift.label} expired", bt.map(&:to_s)
-        end
         status = $?
       end
       stdout = th_stdout.value if capture_stdout
@@ -115,6 +107,12 @@ module EnvUtil
       status ||= Process.wait2(pid)[1]
       stdout = stdout_filter.call(stdout) if stdout_filter
       stderr = stderr_filter.call(stderr) if stderr_filter
+      if timeout_error
+        bt = caller_locations
+        msg = "execution of #{bt.shift.label} expired"
+        msg = Test::Unit::Assertions::FailDesc[status, msg, [stdout, stderr].join("\n")].()
+        raise timeout_error, msg, bt.map(&:to_s)
+      end
       return stdout, stderr, status
     end
   ensure
@@ -332,11 +330,11 @@ module Test
           full_message << "pid #{pid}"
           full_message << " killed by #{sigdesc}" if sigdesc
           if out and !out.empty?
-            full_message << "\n#{out.gsub(/^/, '| ')}"
+            full_message << "\n#{out.b.gsub(/^/, '| ')}"
             full_message << "\n" if /\n\z/ !~ full_message
           end
           if log
-            full_message << "\n#{log.gsub(/^/, '| ')}"
+            full_message << "\n#{log.b.gsub(/^/, '| ')}"
           end
           full_message
         end
@@ -353,22 +351,19 @@ module Test
           raise "test_stderr ignored, use block only or without block" if test_stderr != []
           yield(stdout.lines.map {|l| l.chomp }, stderr.lines.map {|l| l.chomp }, status)
         else
-          errs = []
-          [[test_stdout, stdout], [test_stderr, stderr]].each do |exp, act|
-            begin
-              if exp.is_a?(Regexp)
-                assert_match(exp, act, message)
-              elsif exp.all? {|e| String === e}
-                assert_equal(exp, act.lines.map {|l| l.chomp }, message)
-              else
-                assert_pattern_list(exp, act, message)
+          all_assertions(message) do |a|
+            [["stdout", test_stdout, stdout], ["stderr", test_stderr, stderr]].each do |key, exp, act|
+              a.for(key) do
+                if exp.is_a?(Regexp)
+                  assert_match(exp, act)
+                elsif exp.all? {|e| String === e}
+                  assert_equal(exp, act.lines.map {|l| l.chomp })
+                else
+                  assert_pattern_list(exp, act)
+                end
               end
-            rescue MiniTest::Assertion => e
-              errs << e.message
-              message = nil
             end
           end
-          raise MiniTest::Assertion, errs.join("\n---\n") unless errs.empty?
           status
         end
       end
@@ -380,7 +375,7 @@ module Test
         assert(status.success?, "#{message} (#{status.inspect})")
       end
 
-      ABORT_SIGNALS = Signal.list.values_at(*%w"ILL ABRT BUS SEGV")
+      ABORT_SIGNALS = Signal.list.values_at(*%w"ILL ABRT BUS SEGV TERM")
 
       def assert_separately(args, file = nil, line = nil, src, ignore_stderr: nil, **opt)
         unless file and line

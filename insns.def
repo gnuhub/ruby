@@ -370,7 +370,7 @@ concatstrings
     val = rb_str_resurrect(TOPN(i));
     while (i-- > 0) {
 	const VALUE v = TOPN(i);
-	rb_str_append(val, v);
+	rb_str_append_literal(val, v);
     }
     POPN(num);
 }
@@ -387,6 +387,23 @@ tostring
 (VALUE val)
 {
     val = rb_obj_as_string(val);
+}
+
+/**
+  @c put
+  @e Freeze (dynamically) created strings.
+  @j （埋め込み）文字列を freeze する。もし、debug_info が与えられていれば、それを設定する。
+ */
+DEFINE_INSN
+freezestring
+(VALUE debug_info)
+(VALUE str)
+(VALUE str)
+{
+    if (!NIL_P(debug_info)) {
+	rb_ivar_set(str, id_debug_created_info, debug_info);
+    }
+    rb_str_freeze(str);
 }
 
 /**
@@ -526,9 +543,7 @@ newhash
 {
     rb_num_t i;
 
-    if(RUBY_DTRACE_HASH_CREATE_ENABLED()) {
-	RUBY_DTRACE_HASH_CREATE(num, rb_sourcefile(), rb_sourceline());
-    }
+    RUBY_DTRACE_CREATE_HOOK(HASH, num);
 
     val = rb_hash_new();
 
@@ -796,7 +811,7 @@ trace
         RUBY_DTRACE_CMETHOD_ENTRY_ENABLED() ||
         RUBY_DTRACE_CMETHOD_RETURN_ENABLED()) {
 
-        switch(flag) {
+        switch (flag) {
           case RUBY_EVENT_CALL:
             RUBY_DTRACE_METHOD_ENTRY_HOOK(th, 0, 0);
             break;
@@ -916,7 +931,7 @@ defineclass
     /* enter scope */
     vm_push_frame(th, class_iseq, VM_FRAME_MAGIC_CLASS, klass,
 		  VM_ENVVAL_BLOCK_PTR(GET_BLOCK_PTR()),
-		  (VALUE)vm_cref_push(th, klass, NULL),
+		  (VALUE)vm_cref_push(th, klass, NULL, FALSE),
 		  class_iseq->body->iseq_encoded, GET_SP(),
 		  class_iseq->body->local_size, class_iseq->body->stack_max);
 
@@ -936,14 +951,15 @@ defineclass
  */
 DEFINE_INSN
 send
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc, ISEQ blockiseq)
 (...)
 (VALUE val) // inc += - (int)(ci->orig_argc + ((ci->flag & VM_CALL_ARGS_BLOCKARG) ? 1 : 0));
 {
-    ci->argc = ci->orig_argc;
-    vm_caller_setup_arg_block(th, reg_cfp, ci, FALSE);
-    vm_search_method(ci, ci->recv = TOPN(ci->argc));
-    CALL_METHOD(ci);
+    struct rb_calling_info calling;
+
+    vm_caller_setup_arg_block(th, reg_cfp, &calling, ci, blockiseq, FALSE);
+    vm_search_method(ci, cc, calling.recv = TOPN(calling.argc = ci->orig_argc));
+    CALL_METHOD(&calling, ci, cc);
 }
 
 DEFINE_INSN
@@ -967,13 +983,14 @@ opt_str_freeze
  */
 DEFINE_INSN
 opt_send_without_block
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (...)
 (VALUE val) // inc += -ci->orig_argc;
 {
-    ci->argc = ci->orig_argc;
-    vm_search_method(ci, ci->recv = TOPN(ci->argc));
-    CALL_METHOD(ci);
+    struct rb_calling_info calling;
+    calling.blockptr = NULL;
+    vm_search_method(ci, cc, calling.recv = TOPN(calling.argc = ci->orig_argc));
+    CALL_METHOD(&calling, ci, cc);
 }
 
 /**
@@ -983,15 +1000,17 @@ opt_send_without_block
  */
 DEFINE_INSN
 invokesuper
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc, ISEQ blockiseq)
 (...)
 (VALUE val) // inc += - (int)(ci->orig_argc + ((ci->flag & VM_CALL_ARGS_BLOCKARG) ? 1 : 0));
 {
-    ci->argc = ci->orig_argc;
-    vm_caller_setup_arg_block(th, reg_cfp, ci, TRUE);
-    ci->recv = GET_SELF();
-    vm_search_super_method(th, GET_CFP(), ci);
-    CALL_METHOD(ci);
+    struct rb_calling_info calling;
+    calling.argc = ci->orig_argc;
+
+    vm_caller_setup_arg_block(th, reg_cfp, &calling, ci, blockiseq, TRUE);
+    calling.recv = GET_SELF();
+    vm_search_super_method(th, GET_CFP(), &calling, ci, cc);
+    CALL_METHOD(&calling, ci, cc);
 }
 
 /**
@@ -1005,10 +1024,12 @@ invokeblock
 (...)
 (VALUE val)  // inc += 1 - ci->orig_argc;
 {
-    ci->argc = ci->orig_argc;
-    ci->blockptr = 0;
-    ci->recv = GET_SELF();
-    val = vm_invoke_block(th, GET_CFP(), ci);
+    struct rb_calling_info calling;
+    calling.argc = ci->orig_argc;
+    calling.blockptr = NULL;
+    calling.recv = GET_SELF();
+
+    val = vm_invoke_block(th, GET_CFP(), &calling, ci);
     if (val == Qundef) {
 	RESTORE_REGS();
 	NEXT_INSN();
@@ -1126,6 +1147,23 @@ branchunless
     }
 }
 
+/**
+  @c jump
+  @e if val is nil, set PC to (PC + dst).
+  @j もし val が nil ならば、PC を (PC + dst) にする。
+ */
+DEFINE_INSN
+branchnil
+(OFFSET dst)
+(VALUE val)
+()
+{
+    if (NIL_P(val)) {
+	RUBY_VM_CHECK_INTS(th);
+	JUMP(dst);
+    }
+}
+
 
 /**********************************************************/
 /* for optimize                                           */
@@ -1143,7 +1181,7 @@ getinlinecache
 (VALUE val)
 {
     if (ic->ic_serial == GET_GLOBAL_CONSTANT_STATE() &&
-	ic->ic_cref == rb_vm_get_cref(GET_EP())) {
+	(ic->ic_cref == NULL || ic->ic_cref == rb_vm_get_cref(GET_EP()))) {
 	val = ic->ic_value.value;
 	JUMP(dst);
     }
@@ -1164,12 +1202,10 @@ setinlinecache
 (VALUE val)
 (VALUE val)
 {
-    if (ic->ic_value.value == Qundef) {
-	rb_iseq_add_mark_object(GET_ISEQ(), val);
-    }
+    VM_ASSERT(ic->ic_value.value != Qundef);
     ic->ic_value.value = val;
     ic->ic_serial = GET_GLOBAL_CONSTANT_STATE() - ruby_vm_const_missing_count;
-    ic->ic_cref = rb_vm_get_cref(GET_EP());
+    ic->ic_cref = vm_get_const_key_cref(GET_EP());
     ruby_vm_const_missing_count = 0;
 }
 
@@ -1260,7 +1296,7 @@ opt_case_dispatch
  */
 DEFINE_INSN
 opt_plus
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1323,7 +1359,7 @@ opt_plus
  */
 DEFINE_INSN
 opt_minus
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1371,7 +1407,7 @@ opt_minus
  */
 DEFINE_INSN
 opt_mult
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1421,7 +1457,7 @@ opt_mult
  */
 DEFINE_INSN
 opt_div
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1484,7 +1520,7 @@ opt_div
  */
 DEFINE_INSN
 opt_mod
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1551,11 +1587,11 @@ opt_mod
  */
 DEFINE_INSN
 opt_eq
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
-    val = opt_eq_func(recv, obj, ci);
+    val = opt_eq_func(recv, obj, ci, cc);
 
     if (val == Qundef) {
 	/* other */
@@ -1572,16 +1608,17 @@ opt_eq
  */
 DEFINE_INSN
 opt_neq
-(CALL_INFO ci, CALL_INFO ci_eq)
+(CALL_INFO ci, CALL_CACHE cc, CALL_INFO ci_eq, CALL_CACHE cc_eq)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
     extern VALUE rb_obj_not_equal(VALUE obj1, VALUE obj2);
-    vm_search_method(ci, recv);
+    vm_search_method(ci, cc, recv);
+
     val = Qundef;
 
-    if (check_cfunc(ci->me, rb_obj_not_equal)) {
-	val = opt_eq_func(recv, obj, ci_eq);
+    if (check_cfunc(cc->me, rb_obj_not_equal)) {
+	val = opt_eq_func(recv, obj, ci_eq, cc_eq);
 
 	if (val != Qundef) {
 	    val = RTEST(val) ? Qfalse : Qtrue;
@@ -1603,7 +1640,7 @@ opt_neq
  */
 DEFINE_INSN
 opt_lt
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1647,7 +1684,7 @@ opt_lt
  */
 DEFINE_INSN
 opt_le
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1682,7 +1719,7 @@ opt_le
  */
 DEFINE_INSN
 opt_gt
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1726,7 +1763,7 @@ opt_gt
  */
 DEFINE_INSN
 opt_ge
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1760,7 +1797,7 @@ opt_ge
  */
 DEFINE_INSN
 opt_ltlt
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1792,7 +1829,7 @@ opt_ltlt
  */
 DEFINE_INSN
 opt_aref
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj)
 (VALUE val)
 {
@@ -1822,7 +1859,7 @@ opt_aref
  */
 DEFINE_INSN
 opt_aset
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv, VALUE obj, VALUE set)
 (VALUE val)
 {
@@ -1855,7 +1892,7 @@ opt_aset
  */
 DEFINE_INSN
 opt_aset_with
-(CALL_INFO ci, VALUE key)
+(CALL_INFO ci, CALL_CACHE cc, VALUE key)
 (VALUE recv, VALUE val)
 (VALUE val)
 {
@@ -1877,7 +1914,7 @@ opt_aset_with
  */
 DEFINE_INSN
 opt_aref_with
-(CALL_INFO ci, VALUE key)
+(CALL_INFO ci, CALL_CACHE cc, VALUE key)
 (VALUE recv)
 (VALUE val)
 {
@@ -1898,7 +1935,7 @@ opt_aref_with
  */
 DEFINE_INSN
 opt_length
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv)
 (VALUE val)
 {
@@ -1933,7 +1970,7 @@ opt_length
  */
 DEFINE_INSN
 opt_size
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv)
 (VALUE val)
 {
@@ -1968,7 +2005,7 @@ opt_size
  */
 DEFINE_INSN
 opt_empty_p
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv)
 (VALUE val)
 {
@@ -2006,7 +2043,7 @@ opt_empty_p
  */
 DEFINE_INSN
 opt_succ
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv)
 (VALUE val)
 {
@@ -2049,14 +2086,15 @@ opt_succ
  */
 DEFINE_INSN
 opt_not
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE recv)
 (VALUE val)
 {
     extern VALUE rb_obj_not(VALUE obj);
-    vm_search_method(ci, recv);
 
-    if (check_cfunc(ci->me, rb_obj_not)) {
+    vm_search_method(ci, cc, recv);
+
+    if (check_cfunc(cc->me, rb_obj_not)) {
 	val = RTEST(recv) ? Qfalse : Qtrue;
     }
     else {
@@ -2092,7 +2130,7 @@ opt_regexpmatch1
  */
 DEFINE_INSN
 opt_regexpmatch2
-(CALL_INFO ci)
+(CALL_INFO ci, CALL_CACHE cc)
 (VALUE obj2, VALUE obj1)
 (VALUE val)
 {

@@ -175,6 +175,11 @@ class Gem::Specification < Gem::BasicSpecification
 
   @@stubs_by_name = {}
 
+  # Sentinel object to represent "not found" stubs
+  NOT_FOUND = Struct.new(:to_spec, :this).new # :nodoc:
+  @@spec_with_requirable_file          = {}
+  @@active_stub_with_requirable_file   = {}
+
   ######################################################################
   # :section: Required gemspec attributes
 
@@ -563,7 +568,7 @@ class Gem::Specification < Gem::BasicSpecification
   # Ideally you should pick one that is OSI (Open Source Initiative)
   # http://opensource.org/licenses/alphabetical approved.
   #
-  # The most commonly used OSI approved licenses are BSD-3-Clause and MIT.
+  # The most commonly used OSI approved licenses are MIT and Apache-2.0.
   # GitHub also provides a license picker at http://choosealicense.com/.
   #
   # You should specify a license for your gem so that people know how they are
@@ -592,7 +597,7 @@ class Gem::Specification < Gem::BasicSpecification
   # See #license= for more discussion
   #
   # Usage:
-  #   spec.licenses = ['MIT', 'GPL-2']
+  #   spec.licenses = ['MIT', 'GPL-2.0']
 
   def licenses= licenses
     @licenses = Array licenses
@@ -619,6 +624,10 @@ class Gem::Specification < Gem::BasicSpecification
   #   ruby 2.0.0p247 (2013-06-27 revision 41674) [x86_64-darwin12.4.0]
   #   #<Gem::Version "2.0.0.247">
   #
+  # Because patch-level is taken into account, be very careful specifying using
+  # `<=`: `<= 2.2.2` will not match any patch-level of 2.2.2 after the `p0`
+  # release. It is much safer to specify `< 2.2.3` instead
+  #
   # Usage:
   #
   #  # This gem will work with 1.8.6 or greater...
@@ -626,6 +635,9 @@ class Gem::Specification < Gem::BasicSpecification
   #
   #  # Only with ruby 2.0.x
   #  spec.required_ruby_version = '~> 2.0'
+  #
+  #  # Only with ruby between 2.2.0 and 2.2.2
+  #  spec.required_ruby_version = ['>= 2.2.0', '< 2.2.3']
 
   def required_ruby_version= req
     @required_ruby_version = Gem::Requirement.create req
@@ -733,23 +745,41 @@ class Gem::Specification < Gem::BasicSpecification
   end
 
   def self.gemspec_stubs_in dir, pattern
-    Dir[File.join(dir, pattern)].map { |path|
-      if dir == default_specifications_dir
-        Gem::StubSpecification.default_gemspec_stub(path)
-      else
-        Gem::StubSpecification.gemspec_stub(path)
-      end
-    }.select(&:valid?)
+    Dir[File.join(dir, pattern)].map { |path| yield path }.select(&:valid?)
   end
   private_class_method :gemspec_stubs_in
 
+  def self.default_stubs pattern
+    base_dir = Gem.default_dir
+    gems_dir = File.join base_dir, "gems"
+    gemspec_stubs_in(default_specifications_dir, pattern) do |path|
+      Gem::StubSpecification.default_gemspec_stub(path, base_dir, gems_dir)
+    end
+  end
+  private_class_method :default_stubs
+
+  def self.installed_stubs dirs, pattern
+    map_stubs(dirs, pattern) do |path, base_dir, gems_dir|
+      Gem::StubSpecification.gemspec_stub(path, base_dir, gems_dir)
+    end
+  end
+  private_class_method :installed_stubs
+
   if [].respond_to? :flat_map
     def self.map_stubs(dirs, pattern) # :nodoc:
-      dirs.flat_map { |dir| gemspec_stubs_in(dir, pattern) }
+      dirs.flat_map { |dir|
+        base_dir = File.dirname dir
+        gems_dir = File.join base_dir, "gems"
+        gemspec_stubs_in(dir, pattern) { |path| yield path, base_dir, gems_dir }
+      }
     end
   else # FIXME: remove when 1.8 is dropped
     def self.map_stubs(dirs, pattern) # :nodoc:
-      dirs.map { |dir| gemspec_stubs_in(dir, pattern) }.flatten 1
+      dirs.map { |dir|
+        base_dir = File.dirname dir
+        gems_dir = File.join base_dir, "gems"
+        gemspec_stubs_in(dir, pattern) { |path| yield path, base_dir, gems_dir }
+      }.flatten 1
     end
   end
   private_class_method :map_stubs
@@ -796,7 +826,8 @@ class Gem::Specification < Gem::BasicSpecification
 
   def self.stubs
     @@stubs ||= begin
-      stubs = map_stubs([default_specifications_dir] + dirs, "*.gemspec")
+      pattern = "*.gemspec"
+      stubs = default_stubs(pattern).concat installed_stubs(dirs, pattern)
       stubs = uniq_by(stubs) { |stub| stub.full_name }
 
       _resort!(stubs)
@@ -811,10 +842,11 @@ class Gem::Specification < Gem::BasicSpecification
   # Returns a Gem::StubSpecification for installed gem named +name+
 
   def self.stubs_for name
-    if @@stubs || @@stubs_by_name[name]
+    if @@stubs
       @@stubs_by_name[name] || []
     else
-      stubs = map_stubs([default_specifications_dir] + dirs, "#{name}-*.gemspec")
+      pattern = "#{name}-*.gemspec"
+      stubs = default_stubs(pattern) + installed_stubs(dirs, pattern)
       stubs = uniq_by(stubs) { |stub| stub.full_name }.group_by(&:name)
       stubs.each_value { |v| sort_by!(v) { |i| i.version } }
 
@@ -999,10 +1031,11 @@ class Gem::Specification < Gem::BasicSpecification
   # Return the best specification that contains the file matching +path+.
 
   def self.find_by_path path
-    stub = stubs.find { |spec|
-      spec.contains_requirable_file? path
-    }
-    stub && stub.to_spec
+    path = path.dup.freeze
+    spec = @@spec_with_requirable_file[path] ||= (stubs.find { |s|
+      s.contains_requirable_file? path
+    } || NOT_FOUND)
+    spec.to_spec
   end
 
   ##
@@ -1014,6 +1047,13 @@ class Gem::Specification < Gem::BasicSpecification
       s.contains_requirable_file? path unless s.activated?
     }
     stub && stub.to_spec
+  end
+
+  def self.find_active_stub_by_path path
+    stub = @@active_stub_with_requirable_file[path] ||= (stubs.find { |s|
+      s.activated? and s.contains_requirable_file? path
+    } || NOT_FOUND)
+    stub.this
   end
 
   ##
@@ -1233,6 +1273,8 @@ class Gem::Specification < Gem::BasicSpecification
     @@all = nil
     @@stubs = nil
     @@stubs_by_name = {}
+    @@spec_with_requirable_file          = {}
+    @@active_stub_with_requirable_file   = {}
     _clear_load_cache
     unresolved = unresolved_deps
     unless unresolved.empty? then
@@ -1917,21 +1959,8 @@ class Gem::Specification < Gem::BasicSpecification
     spec
   end
 
-  def find_full_gem_path # :nodoc:
-    super || File.expand_path(File.join(gems_dir, original_name))
-  end
-  private :find_full_gem_path
-
   def full_name
     @full_name ||= super
-  end
-
-  ##
-  # The path to the gem.build_complete file within the extension install
-  # directory.
-
-  def gem_build_complete_path # :nodoc:
-    File.join extension_dir, 'gem.build_complete'
   end
 
   ##
@@ -1939,6 +1968,11 @@ class Gem::Specification < Gem::BasicSpecification
 
   def gem_dir # :nodoc:
     super
+  end
+
+  def gems_dir
+    # TODO: this logic seems terribly broken, but tests fail if just base_dir
+    @gems_dir ||= File.join(loaded_from && base_dir || Gem.dir, "gems")
   end
 
   ##
@@ -1988,6 +2022,8 @@ class Gem::Specification < Gem::BasicSpecification
 
   def initialize name = nil, version = nil
     super()
+    @gems_dir              = nil
+    @base_dir              = nil
     @loaded = false
     @activated = false
     @loaded_from = nil
@@ -2035,6 +2071,15 @@ class Gem::Specification < Gem::BasicSpecification
         raise e
       end
     end
+  end
+
+  def base_dir
+    return Gem.dir unless loaded_from
+    @base_dir ||= if default_gem? then
+                    File.dirname File.dirname File.dirname loaded_from
+                  else
+                    File.dirname File.dirname loaded_from
+                  end
   end
 
   ##
@@ -2562,6 +2607,7 @@ class Gem::Specification < Gem::BasicSpecification
     trail.push(self)
     begin
       dependencies.each do |dep|
+        next unless dep.runtime?
         dep.to_specs.reverse_each do |dep_spec|
           next if visited.has_key?(dep_spec)
           visited[dep_spec] = true
@@ -2712,11 +2758,18 @@ class Gem::Specification < Gem::BasicSpecification
         raise Gem::InvalidSpecificationException,
           "each license must be 64 characters or less"
       end
+
+      if !Gem::Licenses.match?(license)
+        warning <<-warning
+WARNING: license value '#{license}' is invalid.  Use a license identifier from
+http://spdx.org/licenses or '#{Gem::Licenses::NONSTANDARD}' for a nonstandard license.
+        warning
+      end
     }
 
     warning <<-warning if licenses.empty?
-licenses is empty, but is recommended.  Use a license abbreviation from:
-http://opensource.org/licenses/alphabetical
+licenses is empty, but is recommended.  Use a license identifier from
+http://spdx.org/licenses or '#{Gem::Licenses::NONSTANDARD}' for a nonstandard license.
     warning
 
     validate_permissions
@@ -2788,24 +2841,27 @@ http://opensource.org/licenses/alphabetical
   # versioning.
 
   def validate_dependencies # :nodoc:
-    seen = {}
+    # NOTE: see REFACTOR note in Gem::Dependency about types - this might be brittle
+    seen = Gem::Dependency::TYPES.inject({}) { |types, type| types.merge({ type => {}}) }
 
+    error_messages = []
+    warning_messages = []
     dependencies.each do |dep|
-      if prev = seen[dep.name] then
-        raise Gem::InvalidSpecificationException, <<-MESSAGE
+      if prev = seen[dep.type][dep.name] then
+        error_messages << <<-MESSAGE
 duplicate dependency on #{dep}, (#{prev.requirement}) use:
-    add_runtime_dependency '#{dep.name}', '#{dep.requirement}', '#{prev.requirement}'
+    add_#{dep.type}_dependency '#{dep.name}', '#{dep.requirement}', '#{prev.requirement}'
         MESSAGE
       end
 
-      seen[dep.name] = dep
+      seen[dep.type][dep.name] = dep
 
       prerelease_dep = dep.requirements_list.any? do |req|
         Gem::Requirement.new(req).prerelease?
       end
 
-      warning "prerelease dependency on #{dep} is not recommended" if
-        prerelease_dep
+      warning_messages << "prerelease dependency on #{dep} is not recommended" if
+        prerelease_dep && !version.prerelease?
 
       overly_strict = dep.requirement.requirements.length == 1 &&
         dep.requirement.requirements.any? do |op, version|
@@ -2820,7 +2876,7 @@ duplicate dependency on #{dep}, (#{prev.requirement}) use:
 
         base = dep_version.segments.first 2
 
-        warning <<-WARNING
+        warning_messages << <<-WARNING
 pessimistic dependency on #{dep} may be overly strict
   if #{dep.name} is semantically versioned, use:
     add_#{dep.type}_dependency '#{dep.name}', '~> #{base.join '.'}', '>= #{dep_version}'
@@ -2842,12 +2898,18 @@ pessimistic dependency on #{dep} may be overly strict
                    ", '>= #{dep_version}'"
                  end
 
-        warning <<-WARNING
+        warning_messages << <<-WARNING
 open-ended dependency on #{dep} is not recommended
   if #{dep.name} is semantically versioned, use:
     add_#{dep.type}_dependency '#{dep.name}', '~> #{base.join '.'}'#{bugfix}
         WARNING
       end
+    end
+    if error_messages.any?
+      raise Gem::InvalidSpecificationException, error_messages.join
+    end
+    if warning_messages.any?
+      warning_messages.each { |warning_message| warning warning_message }
     end
   end
 
@@ -2929,6 +2991,10 @@ open-ended dependency on #{dep} is not recommended
     @warnings += 1
 
     alert_warning statement
+  end
+
+  def raw_require_paths # :nodoc:
+    @require_paths
   end
 
   extend Gem::Deprecate

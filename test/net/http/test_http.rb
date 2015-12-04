@@ -838,6 +838,22 @@ class TestNetHTTPContinue < Test::Unit::TestCase
     assert_not_match(/HTTP\/1.1 100 continue/, @debug.string)
   end
 
+  def test_expect_continue_error_before_body
+    @log_tester = nil
+    mount_proc {|req, res|
+      raise WEBrick::HTTPStatus::Forbidden
+    }
+    start {|http|
+      uheader = {'content-length' => '5', 'expect' => '100-continue'}
+      http.continue_timeout = 1 # allow the server to respond before sending
+      http.request_post('/continue', 'data', uheader) {|res|
+        assert_equal(res.code, '403')
+      }
+    }
+    assert_match(/Expect: 100-continue/, @debug.string)
+    assert_not_match(/HTTP\/1.1 100 continue/, @debug.string)
+  end
+
   def test_expect_continue_error_while_waiting
     mount_proc {|req, res|
       res.status = 501
@@ -874,6 +890,23 @@ class TestNetHTTPKeepAlive < Test::Unit::TestCase
       sleep 1.5
       assert_nothing_raised {
         res = http.get('/')
+      }
+      assert_kind_of Net::HTTPResponse, res
+      assert_kind_of String, res.body
+    }
+  end
+
+  def test_server_closed_connection_auto_reconnect
+    start {|http|
+      res = http.get('/')
+      http.keep_alive_timeout = 5
+      assert_kind_of Net::HTTPResponse, res
+      assert_kind_of String, res.body
+      sleep 1.5
+      assert_nothing_raised {
+        # Net::HTTP should detect the closed connection before attempting the
+        # request, since post requests cannot be retried.
+        res = http.post('/', 'query=foo', 'content-type' => 'application/x-www-form-urlencoded')
       }
       assert_kind_of Net::HTTPResponse, res
       assert_kind_of String, res.body
