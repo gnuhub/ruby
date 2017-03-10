@@ -21,6 +21,7 @@
 #include <unistd.h>
 #endif
 
+#undef HAVE_DIRENT_NAMLEN
 #if defined HAVE_DIRENT_H && !defined _WIN32
 # include <dirent.h>
 # define NAMLEN(dirent) strlen((dirent)->d_name)
@@ -30,6 +31,7 @@
 #else
 # define dirent direct
 # define NAMLEN(dirent) (dirent)->d_namlen
+# define HAVE_DIRENT_NAMLEN 1
 # if HAVE_SYS_NDIR_H
 #  include <sys/ndir.h>
 # endif
@@ -81,14 +83,19 @@ char *strchr(char*,char);
 #include <sys/attr.h>
 #endif
 
+#define USE_NAME_ON_FS_REAL_BASENAME 1	/* platform dependent APIs to
+					 * get real basenames */
+#define USE_NAME_ON_FS_BY_FNMATCH 2	/* select the matching
+					 * basename by fnmatch */
+
 #ifdef HAVE_GETATTRLIST
-# define USE_NAME_ON_FS 1
+# define USE_NAME_ON_FS USE_NAME_ON_FS_REAL_BASENAME
 # define RUP32(size) ((size)+3/4)
 # define SIZEUP32(type) RUP32(sizeof(type))
 #elif defined _WIN32
-# define USE_NAME_ON_FS 1
+# define USE_NAME_ON_FS USE_NAME_ON_FS_REAL_BASENAME
 #elif defined DOSISH
-# define USE_NAME_ON_FS 2	/* by fnmatch */
+# define USE_NAME_ON_FS USE_NAME_ON_FS_BY_FNMATCH
 #else
 # define USE_NAME_ON_FS 0
 #endif
@@ -259,7 +266,7 @@ bracket(
     return ok == not ? NULL : (char *)p + 1;
 }
 
-/* If FNM_PATHNAME is set, only path element will be matched. (upto '/' or '\0')
+/* If FNM_PATHNAME is set, only path element will be matched. (up to '/' or '\0')
    Otherwise, entire string will be matched.
    End marker itself won't be compared.
    And if function succeeds, *pcur reaches end marker.
@@ -438,7 +445,7 @@ dir_free(void *ptr)
 static size_t
 dir_memsize(const void *ptr)
 {
-    return ptr ? sizeof(struct dir_data) : 0;
+    return sizeof(struct dir_data);
 }
 
 static const rb_data_type_t dir_data_type = {
@@ -491,7 +498,7 @@ dir_initialize(int argc, VALUE *argv, VALUE dir)
     const char *path;
 
     if (!keyword_ids[0]) {
-	keyword_ids[0] = rb_intern("encoding");
+	keyword_ids[0] = rb_id_encoding();
     }
 
     fsenc = rb_filesystem_encoding();
@@ -519,11 +526,12 @@ dir_initialize(int argc, VALUE *argv, VALUE dir)
     path = RSTRING_PTR(dirname);
     dp->dir = opendir(path);
     if (dp->dir == NULL) {
-	if (rb_gc_for_fd(errno)) {
+	int e = errno;
+	if (rb_gc_for_fd(e)) {
 	    dp->dir = opendir(path);
 	}
 #ifdef HAVE_GETATTRLIST
-	else if (errno == EIO) {
+	else if (e == EIO) {
 	    u_int32_t attrbuf[1];
 	    struct attrlist al = {ATTR_BIT_MAP_COUNT, 0};
 	    if (getattrlist(path, &al, attrbuf, sizeof(attrbuf), FSOPT_NOFOLLOW) == 0) {
@@ -533,7 +541,7 @@ dir_initialize(int argc, VALUE *argv, VALUE dir)
 #endif
 	if (dp->dir == NULL) {
 	    RB_GC_GUARD(dirname);
-	    rb_sys_fail_path(orig);
+	    rb_syserr_fail_path(e, orig);
 	}
     }
     dp->path = orig;
@@ -699,6 +707,27 @@ fundamental_encoding_p(rb_encoding *enc)
 #else
 # define READDIR(dir, enc) readdir((dir))
 #endif
+static int
+to_be_skipped(const struct dirent *dp)
+{
+    const char *name = dp->d_name;
+    if (name[0] != '.') return FALSE;
+#ifdef HAVE_DIRENT_NAMLEN
+    switch (NAMLEN(dp)) {
+      case 2:
+	if (name[1] != '.') return FALSE;
+      case 1:
+	return TRUE;
+      default:
+	break;
+    }
+#else
+    if (!name[1]) return TRUE;
+    if (name[1] != '.') return FALSE;
+    if (!name[2]) return TRUE;
+#endif
+    return FALSE;
+}
 
 /*
  *  call-seq:
@@ -724,7 +753,8 @@ dir_read(VALUE dir)
 	return rb_external_str_new_with_enc(dp->d_name, NAMLEN(dp), dirp->enc);
     }
     else {
-	if (errno != 0) rb_sys_fail(0);
+	int e = errno;
+	if (e != 0) rb_syserr_fail(e, 0);
 	return Qnil;		/* end of stream */
     }
 }
@@ -885,8 +915,8 @@ dir_rewind(VALUE dir)
  *  call-seq:
  *     dir.close -> nil
  *
- *  Closes the directory stream. Any further attempts to access
- *  <em>dir</em> will raise an <code>IOError</code>.
+ *  Closes the directory stream.
+ *  Calling this method on closed Dir object is ignored since Ruby 2.3.
  *
  *     d = Dir.new("testdir")
  *     d.close   #=> nil
@@ -1203,7 +1233,12 @@ sys_enc_warning_in(const char *func, const char *mesg, rb_encoding *enc)
  * ENOTDIR can be returned by stat(2) if a non-leaf element of the path
  * is not a directory.
  */
-#define to_be_ignored(e) ((e) == ENOENT || (e) == ENOTDIR)
+ALWAYS_INLINE(static int to_be_ignored(int e));
+static inline int
+to_be_ignored(int e)
+{
+    return e == ENOENT || e == ENOTDIR;
+}
 
 #ifdef _WIN32
 #define STAT(p, s)	rb_w32_ustati64((p), (s))
@@ -1251,8 +1286,19 @@ do_opendir(const char *path, int flags, rb_encoding *enc)
     }
 #endif
     dirp = opendir(path);
-    if (dirp == NULL && !to_be_ignored(errno))
-	sys_warning(path, enc);
+    if (!dirp) {
+	int e = errno;
+	switch (rb_gc_for_fd(e)) {
+	  default:
+	    dirp = opendir(path);
+	    if (dirp) break;
+	    e = errno;
+	    /* fallback */
+	  case 0:
+	    if (to_be_ignored(e)) break;
+	    sys_warning(path, enc);
+	}
+    }
 #ifdef _WIN32
     if (tmp) rb_str_resize(tmp, 0); /* GC guard */
 #endif
@@ -1470,8 +1516,13 @@ join_path(const char *path, long len, int dirsep, const char *name, size_t namle
 }
 
 #ifdef HAVE_GETATTRLIST
+# if defined HAVE_FGETATTRLIST
+#   define is_case_sensitive(dirp, path) is_case_sensitive(dirp)
+# else
+#   define is_case_sensitive(dirp, path) is_case_sensitive(path)
+# endif
 static int
-is_case_sensitive(DIR *dirp)
+is_case_sensitive(DIR *dirp, const char *path)
 {
     struct {
 	u_int32_t length;
@@ -1482,8 +1533,13 @@ is_case_sensitive(DIR *dirp)
     const int idx = VOL_CAPABILITIES_FORMAT;
     const uint32_t mask = VOL_CAP_FMT_CASE_SENSITIVE;
 
+#   if defined HAVE_FGETATTRLIST
     if (fgetattrlist(dirfd(dirp), &al, attrbuf, sizeof(attrbuf), FSOPT_NOFOLLOW))
 	return -1;
+#   else
+    if (getattrlist(path, &al, attrbuf, sizeof(attrbuf), FSOPT_NOFOLLOW))
+	return -1;
+#   endif
     if (!(cap->valid[idx] & mask))
 	return -1;
     return (cap->capabilities[idx] & mask) != 0;
@@ -1615,7 +1671,7 @@ replace_real_basename(char *path, long base, rb_encoding *enc, int norm_p, int f
     }
     return path;
 }
-#elif USE_NAME_ON_FS == 1
+#elif USE_NAME_ON_FS == USE_NAME_ON_FS_REAL_BASENAME
 # error not implemented
 #endif
 
@@ -1691,7 +1747,7 @@ glob_helper(
 	    plain = 1;
 	    break;
 	  case ALPHA:
-#if USE_NAME_ON_FS == 1
+#if USE_NAME_ON_FS == USE_NAME_ON_FS_REAL_BASENAME
 	    plain = 1;
 #else
 	    magical = 1;
@@ -1746,11 +1802,11 @@ glob_helper(
     if (magical || recursive) {
 	struct dirent *dp;
 	DIR *dirp;
-# if USE_NAME_ON_FS == 2
+# if USE_NAME_ON_FS == USE_NAME_ON_FS_BY_FNMATCH
 	char *plainname = 0;
 # endif
 	IF_NORMALIZE_UTF8PATH(int norm_p);
-# if USE_NAME_ON_FS == 2
+# if USE_NAME_ON_FS == USE_NAME_ON_FS_BY_FNMATCH
 	if (cur + 1 == end && (*cur)->type <= ALPHA) {
 	    plainname = join_path(path, pathlen, dirsep, (*cur)->str, strlen((*cur)->str));
 	    if (!plainname) return -1;
@@ -1778,7 +1834,7 @@ glob_helper(
 	}
 # endif
 # ifdef HAVE_GETATTRLIST
-	if (is_case_sensitive(dirp) == 0)
+	if (is_case_sensitive(dirp, path) == 0)
 	    flags |= FNM_CASEFOLD;
 # endif
 	while ((dp = READDIR(dirp, enc)) != NULL) {
@@ -1850,7 +1906,7 @@ glob_helper(
 		}
 		switch (p->type) {
 		  case ALPHA:
-# if USE_NAME_ON_FS == 2
+# if USE_NAME_ON_FS == USE_NAME_ON_FS_BY_FNMATCH
 		    if (plainname) {
 			*new_end++ = p->next;
 			break;
@@ -1922,7 +1978,7 @@ glob_helper(
 		    status = -1;
 		    break;
 		}
-#if USE_NAME_ON_FS == 1
+#if USE_NAME_ON_FS == USE_NAME_ON_FS_REAL_BASENAME
 		if ((*cur)->type == ALPHA) {
 		    long base = pathlen + (dirsep != 0);
 		    buf = replace_real_basename(buf, base, enc, IF_NORMALIZE_UTF8PATH(1)+0,
@@ -1998,36 +2054,25 @@ rb_glob_caller(const char *path, VALUE a, void *enc)
     return status;
 }
 
-static int
-rb_glob2(const char *path, int flags,
-	 void (*func)(const char *, VALUE, void *), VALUE arg,
-	 rb_encoding* enc)
-{
-    struct glob_args args;
-
-    args.func = func;
-    args.value = arg;
-    args.enc = enc;
-
-    if (flags & FNM_SYSCASE) {
-	rb_warning("Dir.glob() ignores File::FNM_CASEFOLD");
-    }
-
-    return ruby_glob0(path, flags | GLOB_VERBOSE, rb_glob_caller, (VALUE)&args,
-		      enc);
-}
-
 void
 rb_glob(const char *path, void (*func)(const char *, VALUE, void *), VALUE arg)
 {
-    int status = rb_glob2(path, 0, func, arg, rb_ascii8bit_encoding());
+    struct glob_args args;
+    int status;
+
+    args.func = func;
+    args.value = arg;
+    args.enc = rb_ascii8bit_encoding();
+
+    status = ruby_glob0(path, GLOB_VERBOSE, rb_glob_caller, (VALUE)&args,
+			args.enc);
     if (status) GLOB_JUMP_TAG(status);
 }
 
 static void
 push_pattern(const char *path, VALUE ary, void *enc)
 {
-#ifdef __APPLE__
+#if defined _WIN32 || defined __APPLE__
     VALUE name = rb_utf8_str_new_cstr(path);
     rb_encoding *eenc = rb_default_internal_encoding();
     OBJ_TAINT(name);
@@ -2148,7 +2193,7 @@ push_glob(VALUE ary, VALUE str, int flags)
     struct push_glob_args args;
     rb_encoding *enc = rb_enc_get(str);
 
-#ifdef __APPLE__
+#if defined _WIN32 || defined __APPLE__
     str = rb_str_encode_ospath(str);
 #endif
     if (rb_enc_to_index(enc) == ENCINDEX_US_ASCII)
@@ -2160,7 +2205,7 @@ push_glob(VALUE ary, VALUE str, int flags)
     args.glob.value = ary;
     args.glob.enc = enc;
     args.flags = flags;
-#ifdef __APPLE__
+#if defined _WIN32 || defined __APPLE__
     enc = rb_utf8_encoding();
 #endif
 
@@ -2336,7 +2381,7 @@ dir_s_glob(int argc, VALUE *argv, VALUE obj)
 static VALUE
 dir_open_dir(int argc, VALUE *argv)
 {
-    VALUE dir = rb_funcall2(rb_cDir, rb_intern("open"), argc, argv);
+    VALUE dir = rb_funcallv(rb_cDir, rb_intern("open"), argc, argv);
 
     rb_check_typeddata(dir, &dir_data_type);
     return dir;
@@ -2611,6 +2656,72 @@ rb_dir_exists_p(VALUE obj, VALUE fname)
 }
 
 /*
+ * call-seq:
+ *   Dir.empty?(path_name)  ->  true or false
+ *
+ * Returns <code>true</code> if the named file is an empty directory,
+ * <code>false</code> if it is not a directory or non-empty.
+ */
+static VALUE
+rb_dir_s_empty_p(VALUE obj, VALUE dirname)
+{
+    DIR *dir;
+    struct dirent *dp;
+    VALUE result = Qtrue, orig;
+    const char *path;
+    enum {false_on_notdir = 1};
+
+    GlobPathValue(dirname, FALSE);
+    orig = rb_str_dup_frozen(dirname);
+    dirname = rb_str_encode_ospath(dirname);
+    dirname = rb_str_dup_frozen(dirname);
+    path = RSTRING_PTR(dirname);
+
+#if defined HAVE_GETATTRLIST && defined ATTR_DIR_ENTRYCOUNT
+    {
+	u_int32_t attrbuf[SIZEUP32(fsobj_tag_t)];
+	struct attrlist al = {ATTR_BIT_MAP_COUNT, 0, ATTR_CMN_OBJTAG,};
+	if (getattrlist(path, &al, attrbuf, sizeof(attrbuf), 0) != 0)
+	    rb_sys_fail_path(orig);
+	if (*(const fsobj_tag_t *)(attrbuf+1) == VT_HFS) {
+	    al.commonattr = 0;
+	    al.dirattr = ATTR_DIR_ENTRYCOUNT;
+	    if (getattrlist(path, &al, attrbuf, sizeof(attrbuf), 0) == 0) {
+		if (attrbuf[0] >= 2 * sizeof(u_int32_t))
+		    return attrbuf[1] ? Qfalse : Qtrue;
+		if (false_on_notdir) return Qfalse;
+	    }
+	    rb_sys_fail_path(orig);
+	}
+    }
+#endif
+
+    dir = opendir(path);
+    if (!dir) {
+	int e = errno;
+	switch (rb_gc_for_fd(e)) {
+	  default:
+	    dir = opendir(path);
+	    if (dir) break;
+	    e = errno;
+	    /* fall through */
+	  case 0:
+	    if (false_on_notdir && e == ENOTDIR) return Qfalse;
+	    rb_syserr_fail_path(e, orig);
+	}
+    }
+    errno = 0;
+    while ((dp = READDIR(dir, NULL)) != NULL) {
+	if (!to_be_skipped(dp)) {
+	    result = Qfalse;
+	    break;
+	}
+    }
+    closedir(dir);
+    return result;
+}
+
+/*
  *  Objects of class <code>Dir</code> are directory streams representing
  *  directories in the underlying file system. They provide a variety of
  *  ways to list directories and their contents. See also
@@ -2661,6 +2772,7 @@ Init_Dir(void)
     rb_define_singleton_method(rb_cDir,"[]", dir_s_aref, -1);
     rb_define_singleton_method(rb_cDir,"exist?", rb_file_directory_p, 1);
     rb_define_singleton_method(rb_cDir,"exists?", rb_dir_exists_p, 1);
+    rb_define_singleton_method(rb_cDir,"empty?", rb_dir_s_empty_p, 1);
 
     rb_define_singleton_method(rb_cFile,"fnmatch", file_s_fnmatch, -1);
     rb_define_singleton_method(rb_cFile,"fnmatch?", file_s_fnmatch, -1);

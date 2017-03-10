@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 # TODO: $SAFE = 1
 
 begin
@@ -222,6 +223,10 @@ class Gem::TestCase < MiniTest::Unit::TestCase
     @orig_gem_spec_cache = ENV['GEM_SPEC_CACHE']
     @orig_rubygems_gemdeps = ENV['RUBYGEMS_GEMDEPS']
     @orig_rubygems_host = ENV['RUBYGEMS_HOST']
+    ENV.keys.find_all { |k| k.start_with?('GEM_REQUIREMENT_') }.each do |k|
+      ENV.delete k
+    end
+    @orig_gem_env_requirements = ENV.to_hash
 
     ENV['GEM_VENDOR'] = nil
 
@@ -251,6 +256,17 @@ class Gem::TestCase < MiniTest::Unit::TestCase
       @tempdir.untaint
     end
 
+    # This makes the tempdir consistent on Windows.
+    # Dir.tmpdir may return short path name, but Dir[Dir.tmpdir] returns long
+    # path name. https://bugs.ruby-lang.org/issues/10819
+    # File.expand_path or File.realpath doesn't convert path name to long path
+    # name. Only Dir[] (= Dir.glob) works.
+    # Short and long path name is specific to Windows filesystem.
+    if win_platform?
+      @tempdir = Dir[@tempdir][0]
+      @tempdir.untaint
+    end
+
     @gemhome  = File.join @tempdir, 'gemhome'
     @userhome = File.join @tempdir, 'userhome'
     ENV["GEM_SPEC_CACHE"] = File.join @tempdir, 'spec_cache'
@@ -276,6 +292,7 @@ class Gem::TestCase < MiniTest::Unit::TestCase
     ENV['HOME'] = @userhome
     Gem.instance_variable_set :@user_home, nil
     Gem.instance_variable_set :@gemdeps, nil
+    Gem.instance_variable_set :@env_requirements_by_name, nil
     Gem.send :remove_instance_variable, :@ruby_version if
       Gem.instance_variables.include? :@ruby_version
 
@@ -366,6 +383,11 @@ class Gem::TestCase < MiniTest::Unit::TestCase
     Dir.chdir @current_dir
 
     FileUtils.rm_rf @tempdir unless ENV['KEEP_FILES']
+
+    ENV.clear
+    @orig_gem_env_requirements.each do |k,v|
+      ENV[k] = v
+    end
 
     ENV['GEM_HOME']   = @orig_gem_home
     ENV['GEM_PATH']   = @orig_gem_path
@@ -541,7 +563,7 @@ class Gem::TestCase < MiniTest::Unit::TestCase
   # Enables pretty-print for all tests
 
   def mu_pp(obj)
-    s = ''
+    s = String.new
     s = PP.pp obj, s
     s = s.force_encoding(Encoding.default_external) if defined? Encoding
     s.chomp
@@ -569,7 +591,7 @@ class Gem::TestCase < MiniTest::Unit::TestCase
   def write_file(path)
     path = File.join @gemhome, path unless Pathname.new(path).absolute?
     dir = File.dirname path
-    FileUtils.mkdir_p dir
+    FileUtils.mkdir_p dir unless File.directory? dir
 
     open path, 'wb' do |io|
       yield io if block_given?
@@ -1306,11 +1328,21 @@ Also, a list:
   def vendor_gem name = 'a', version = 1
     directory = File.join 'vendor', name
 
+    FileUtils.mkdir_p directory
+
+    save_gemspec name, version, directory
+  end
+
+  ##
+  # create_gemspec creates gem specification in given +direcotry+ or '.'
+  # for the given +name+ and +version+.
+  #
+  # Yields the +specification+ to the block, if given
+
+  def save_gemspec name = 'a', version = 1, directory = '.'
     vendor_spec = Gem::Specification.new name, version do |specification|
       yield specification if block_given?
     end
-
-    FileUtils.mkdir_p directory
 
     open File.join(directory, "#{name}.gemspec"), 'w' do |io|
       io.write vendor_spec.to_ruby

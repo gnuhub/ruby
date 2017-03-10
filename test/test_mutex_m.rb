@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 require 'thread'
 require 'mutex_m'
@@ -7,7 +8,7 @@ class TestMutexM < Test::Unit::TestCase
     o = Object.new
     o.instance_variable_set(:@foo, nil)
     o.extend(Mutex_m)
-    c = ConditionVariable.new
+    c = Thread::ConditionVariable.new
     t = Thread.start {
       o.synchronize do
         until foo = o.instance_variable_get(:@foo)

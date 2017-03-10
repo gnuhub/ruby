@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 def digest_conf(name, hdr = name, funcs = nil, types = nil)
   unless with_config("bundled-#{name}")
     cc = with_config("common-digest")
@@ -5,6 +6,7 @@ def digest_conf(name, hdr = name, funcs = nil, types = nil)
       if File.exist?("#$srcdir/#{name}cc.h") and
         have_header("CommonCrypto/CommonDigest.h")
         $defs << "-D#{name.upcase}_USE_COMMONDIGEST"
+        $headers << "#{name}cc.h"
         return :commondigest
       end
     end
@@ -20,6 +22,7 @@ def digest_conf(name, hdr = name, funcs = nil, types = nil)
       if funcs.all? {|func| OpenSSL.check_func("#{func}_Transform", hdr)} &&
          types.all? {|type| have_type("#{type}_CTX", hdr)}
         $defs << "-D#{name.upcase}_USE_OPENSSL"
+        $headers << "#{name}ossl.h"
         return :ossl
       end
     end

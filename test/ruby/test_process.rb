@@ -1,3 +1,5 @@
+# coding: utf-8
+# frozen_string_literal: false
 require 'test/unit'
 require 'tempfile'
 require 'timeout'
@@ -179,7 +181,11 @@ class TestProcess < Test::Unit::TestCase
     io.close
 
     assert_raise(ArgumentError) { system(*TRUECOMMAND, :pgroup=>-1) }
-    assert_raise(Errno::EPERM) { Process.wait spawn(*TRUECOMMAND, :pgroup=>2) }
+    IO.popen([RUBY, '-egets'], 'w') do |f|
+      assert_raise(Errno::EPERM) {
+        Process.wait spawn(*TRUECOMMAND, :pgroup=>f.pid)
+      }
+    end
 
     io1 = IO.popen([RUBY, "-e", "print Process.getpgrp", :pgroup=>true])
     io2 = IO.popen([RUBY, "-e", "print Process.getpgrp", :pgroup=>io1.pid])
@@ -314,6 +320,16 @@ class TestProcess < Test::Unit::TestCase
     end
   end
 
+  def test_execopt_env_path
+    bug8004 = '[ruby-core:53103] [Bug #8004]'
+    Dir.mktmpdir do |d|
+      open("#{d}/tmp_script.cmd", "w") {|f| f.puts ": ;"; f.chmod(0755)}
+      assert_not_nil(pid = Process.spawn({"PATH" => d}, "tmp_script.cmd"), bug8004)
+      wpid, st = Process.waitpid2(pid)
+      assert_equal([pid, true], [wpid, st.success?], bug8004)
+    end
+  end
+
   def _test_execopts_env_popen(cmd)
     message = cmd.inspect
     IO.popen({"FOO"=>"BAR"}, cmd) {|io|
@@ -423,6 +439,16 @@ class TestProcess < Test::Unit::TestCase
       assert_equal("#{d}/foo", File.read("open_chdir_test").chomp)
     }
   end
+
+  def test_execopts_open_chdir_m17n_path
+    with_tmpchdir {|d|
+      Dir.mkdir "テスト"
+      system(*PWD, :chdir => "テスト", :out => "open_chdir_テスト")
+      assert_file.exist?("open_chdir_テスト")
+      assert_file.not_exist?("テスト/open_chdir_テスト")
+      assert_equal("#{d}/テスト", File.read("open_chdir_テスト").chomp.encode(__ENCODING__))
+    }
+  end if windows? || Encoding.find('locale') == Encoding::UTF_8
 
   def test_execopts_open_failure
     with_tmpchdir {|d|
@@ -610,11 +636,14 @@ class TestProcess < Test::Unit::TestCase
         class E < StandardError; end
         trap(:USR1) { raise E }
         begin
+          puts "start"
+          STDOUT.flush
           system("cat", :in => "fifo")
         rescue E
           puts "ok"
         end
       EOS
+        assert_equal("start\n", io.gets)
         sleep 0.5
         Process.kill(:USR1, io.pid)
         assert_equal("ok\n", io.read)
@@ -1801,7 +1830,15 @@ class TestProcess < Test::Unit::TestCase
       assert_nothing_raised(feature6975) do
         begin
           g = IO.popen([RUBY, "-e", "print Process.gid", gid: group], &:read)
-          assert_equal(gid, g, feature6975)
+          # AIX allows a non-root process to setgid to its supplementary group,
+          # while other UNIXes do not. (This might be AIX's violation of the POSIX standard.)
+          # However, Ruby does not allow a setgid'ed Ruby process to use the -e option.
+          # As a result, the Ruby process invoked by "IO.popen([RUBY, "-e", ..." above fails
+          # with a message like "no -e allowed while running setgid (SecurityError)" to stderr,
+          # the exis status is set to 1, and the variable "g" is set to an empty string.
+          # To conclude, on AIX, if the "gid" variable is a supplementary group,
+          # the assert_equal next can fail, so skip it.
+          assert_equal(gid, g, feature6975) unless $?.exitstatus == 1 && /aix/ =~ RUBY_PLATFORM && gid != Process.gid
         rescue Errno::EPERM, NotImplementedError
         end
       end
@@ -1886,6 +1923,27 @@ EOS
         assert_equal("ok\n", IO.popen(%W"#{exename} /c echo ok", &:read), msg)
         File.binwrite("#{name}.txt", "ok")
         assert_equal("ok", `type #{name}.txt`)
+      end
+    end
+  end if windows?
+
+  def test_exec_nonascii
+    bug12841 = '[ruby-dev:49838] [Bug #12841]'
+
+    [
+      "\u{7d05 7389}",
+      "zuf\u{00E4}llige_\u{017E}lu\u{0165}ou\u{010D}k\u{00FD}_\u{10D2 10D0 10DB 10D4 10DD 10E0 10D4 10D1}_\u{0440 0430 0437 043B 043E 0433 0430}_\u{548C 65B0 52A0 5761 4EE5 53CA 4E1C}",
+      "c\u{1EE7}a",
+    ].each do |arg|
+      begin
+        arg = arg.encode(Encoding.find("locale"))
+      rescue
+      else
+        assert_in_out_err([], "#{<<-"begin;"}\n#{<<-"end;"}", [arg], [], bug12841)
+        begin;
+          arg = "#{arg.b}".force_encoding("#{arg.encoding.name}")
+          exec(ENV["COMSPEC"]||"cmd.exe", "/c", "echo", arg)
+        end;
       end
     end
   end if windows?
@@ -2080,7 +2138,7 @@ EOS
   end
 
   def test_deadlock_by_signal_at_forking
-    assert_separately(["-", RUBY], <<-INPUT, timeout: 60)
+    assert_separately(["-", RUBY], <<-INPUT, timeout: 80)
       ruby = ARGV.shift
       GC.start # reduce garbage
       GC.disable # avoid triggering CoW after forks
@@ -2235,5 +2293,23 @@ EOS
       GC.stress = true
       system(bin, "--disable=gems", "-w", "-e", "puts ARGV", *args)
     end;
+  end
+
+  def test_to_hash_on_arguments
+    all_assertions do |a|
+      %w[Array String].each do |type|
+        a.for(type) do
+          assert_separately(['-', EnvUtil.rubybin], <<~"END;")
+          class #{type}
+            def to_hash
+              raise "[Bug-12355]: #{type}#to_hash is called"
+            end
+          end
+          ex = ARGV[0]
+          assert_equal(true, system([ex, ex], "-e", ""))
+          END;
+        end
+      end
+    end
   end
 end

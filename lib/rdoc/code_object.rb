@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 ##
 # Base class for the RDoc code tree.
 #
@@ -149,8 +150,7 @@ class RDoc::CodeObject
                  else
                    # HACK correct fix is to have #initialize create @comment
                    #      with the correct encoding
-                   if String === @comment and
-                      Object.const_defined? :Encoding and @comment.empty? then
+                   if String === @comment and @comment.empty? then
                      @comment.force_encoding comment.encoding
                    end
                    @comment
@@ -426,4 +426,3 @@ class RDoc::CodeObject
   end
 
 end
-

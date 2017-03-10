@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 #   irb.rb - irb main module
 #       $Release Version: 0.9.6 $
@@ -328,7 +329,7 @@ require "irb/locale"
 #   irb.3(<Foo:0x4010af3c>):003:0> bar #=> bar => nil
 #   # kill jobs 1, 2, and 3
 #   irb.3(<Foo:0x4010af3c>):004:0> kill 1, 2, 3
-#   # list open sesssions, should only include main session
+#   # list open sessions, should only include main session
 #   irb(main):009:0> jobs
 #     #0->irb on main (#<Thread:0x400fb7e4> : running)
 #   # quit irb
@@ -343,7 +344,7 @@ module IRB
 
   # Displays current configuration.
   #
-  # Modifing the configuration is achieved by sending a message to IRB.conf.
+  # Modifying the configuration is achieved by sending a message to IRB.conf.
   #
   # See IRB@Configuration for more information.
   def IRB.conf
@@ -381,21 +382,7 @@ module IRB
     else
       irb = Irb.new
     end
-
-    @CONF[:IRB_RC].call(irb.context) if @CONF[:IRB_RC]
-    @CONF[:MAIN_CONTEXT] = irb.context
-
-    trap("SIGINT") do
-      irb.signal_handle
-    end
-
-    begin
-      catch(:IRB_EXIT) do
-        irb.eval_input
-      end
-    ensure
-      irb_at_exit
-    end
+    irb.run(@CONF)
   end
 
   # Calls each event hook of IRB.conf[:AT_EXIT] when the current session quits.
@@ -429,6 +416,24 @@ module IRB
       @scanner = RubyLex.new
       @scanner.exception_on_syntax_error = false
     end
+
+    def run(conf = IRB.conf)
+      conf[:IRB_RC].call(context) if conf[:IRB_RC]
+      conf[:MAIN_CONTEXT] = context
+
+      trap("SIGINT") do
+        signal_handle
+      end
+
+      begin
+        catch(:IRB_EXIT) do
+          eval_input
+        end
+      ensure
+        conf[:AT_EXIT].each{|hook| hook.call}
+      end
+    end
+
     # Returns the current context of this irb session
     attr_reader :context
     # The lexer used by this irb session
@@ -524,7 +529,7 @@ module IRB
             print messages.join("\n"), "\n"
             unless lasts.empty?
               printf "... %d levels...\n", levels if levels > 0
-              print lasts.join("\n")
+              print lasts.join("\n"), "\n"
             end
             print "Maybe IRB bug!\n" if irb_bug
           end
@@ -698,5 +703,14 @@ module IRB
       end
     end
     array.join("\n")
+  end
+end
+
+class Binding
+  # :nodoc:
+  undef irb if method_defined?(:irb)
+  def irb
+    IRB.setup(eval("__FILE__"))
+    IRB::Irb.new(IRB::WorkSpace.new(self)).run(IRB.conf)
   end
 end

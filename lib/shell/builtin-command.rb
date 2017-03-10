@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 #   shell/builtin-command.rb -
 #       $Release Version: 0.7 $
@@ -12,7 +13,7 @@
 require "shell/filter"
 
 class Shell
-  class BuiltInCommand<Filter
+  class BuiltInCommand < Filter
     def wait?
       false
     end

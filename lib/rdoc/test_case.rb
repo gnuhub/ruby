@@ -1,5 +1,4 @@
-require 'rubygems'
-
+# frozen_string_literal: false
 begin
   gem 'minitest', '~> 4.0' unless defined?(Test::Unit)
 rescue NoMethodError, Gem::LoadError
@@ -39,8 +38,6 @@ class RDoc::TestCase < MiniTest::Unit::TestCase
     super
 
     @top_level = nil
-
-    @have_encoding = Object.const_defined? :Encoding
 
     @RM = RDoc::Markup
 
@@ -144,7 +141,7 @@ class RDoc::TestCase < MiniTest::Unit::TestCase
   def mu_pp obj # :nodoc:
     s = ''
     s = PP.pp obj, s
-    s = s.force_encoding Encoding.default_external if defined? Encoding
+    s = s.force_encoding Encoding.default_external
     s.chomp
   end
 
@@ -176,8 +173,6 @@ class RDoc::TestCase < MiniTest::Unit::TestCase
   # Depends upon Dir.mktmpdir
 
   def temp_dir
-    skip "No Dir::mktmpdir, upgrade your ruby" unless Dir.respond_to? :mktmpdir
-
     Dir.mktmpdir do |temp_dir|
       Dir.chdir temp_dir do
         yield temp_dir
@@ -207,11 +202,3 @@ class RDoc::TestCase < MiniTest::Unit::TestCase
     end
   end
 end
-
-# This hack allows autoload to work when Dir.pwd is changed for Ruby 1.8 since
-# -I paths are not expanded.
-$LOAD_PATH.each do |load_path|
-  break if load_path[0] == ?/
-  load_path.replace File.expand_path load_path
-end if RUBY_VERSION < '1.9'
-

@@ -2,6 +2,7 @@
 #
 # #Win32API
 # bigdecimal
+# cgi/escape
 # continuation
 # coverage
 # date
@@ -40,6 +41,4 @@
 # stringio
 # strscan
 # #syslog
-# #tk
-# #tk/tkutil
 # #zlib

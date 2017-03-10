@@ -452,18 +452,19 @@ sock_connect_nonblock(VALUE sock, VALUE addr, VALUE ex)
     rb_io_set_nonblock(fptr);
     n = connect(fptr->fd, (struct sockaddr*)RSTRING_PTR(addr), RSTRING_SOCKLEN(addr));
     if (n < 0) {
-        if (errno == EINPROGRESS) {
+	int e = errno;
+	if (e == EINPROGRESS) {
             if (ex == Qfalse) {
                 return sym_wait_writable;
             }
-            rb_readwrite_sys_fail(RB_IO_WAIT_WRITABLE, "connect(2) would block");
+            rb_readwrite_syserr_fail(RB_IO_WAIT_WRITABLE, e, "connect(2) would block");
 	}
-	if (errno == EISCONN) {
+	if (e == EISCONN) {
             if (ex == Qfalse) {
                 return INT2FIX(0);
             }
 	}
-	rsock_sys_fail_raddrinfo_or_sockaddr("connect(2)", addr, rai);
+	rsock_syserr_fail_raddrinfo_or_sockaddr(e, "connect(2)", addr, rai);
     }
 
     return INT2FIX(n);
@@ -892,13 +893,27 @@ sock_gethostname(VALUE obj)
 #  define RUBY_MAX_HOST_NAME_LEN 1024
 #endif
 
-    char buf[RUBY_MAX_HOST_NAME_LEN+1];
+    long len = RUBY_MAX_HOST_NAME_LEN;
+    VALUE name;
 
-    if (gethostname(buf, (int)sizeof buf - 1) < 0)
-	rb_sys_fail("gethostname(3)");
-
-    buf[sizeof buf - 1] = '\0';
-    return rb_str_new2(buf);
+    name = rb_str_new(0, len);
+    while (gethostname(RSTRING_PTR(name), len) < 0) {
+	int e = errno;
+	switch (e) {
+	  case ENAMETOOLONG:
+#ifdef __linux__
+	  case EINVAL:
+	    /* glibc before version 2.1 uses EINVAL instead of ENAMETOOLONG */
+#endif
+	    break;
+	  default:
+	    rb_syserr_fail(e, "gethostname(3)");
+	}
+	rb_str_modify_expand(name, len);
+	len += len;
+    }
+    rb_str_resize(name, strlen(RSTRING_PTR(name)));
+    return name;
 }
 #else
 #ifdef HAVE_UNAME
@@ -1939,6 +1954,8 @@ Init_socket(void)
      * ease the use of sockets comparatively to the equivalent C programming interface.
      *
      * Let's create an internet socket using the IPv4 protocol in a C-like manner:
+     *
+     *   require 'socket'
      *
      *   s = Socket.new Socket::AF_INET, Socket::SOCK_STREAM
      *   s.connect Socket.pack_sockaddr_in(80, 'example.com')

@@ -25,6 +25,7 @@ VALUE rb_eLocalJumpError;
 VALUE rb_eSysStackError;
 
 ID ruby_static_id_signo, ruby_static_id_status;
+static ID id_cause;
 #define id_signo ruby_static_id_signo
 #define id_status ruby_static_id_status
 
@@ -75,7 +76,7 @@ ruby_init(void)
     int state = ruby_setup();
     if (state) {
         if (RTEST(ruby_debug))
-            error_print();
+            error_print(GET_THREAD());
 	exit(EXIT_FAILURE);
     }
 }
@@ -162,35 +163,34 @@ ruby_cleanup(volatile int ex)
     rb_thread_t *th = GET_THREAD();
     int nerr;
     volatile int sysex = EXIT_SUCCESS;
+    volatile int step = 0;
 
     rb_threadptr_interrupt(th);
     rb_threadptr_check_signal(th);
     TH_PUSH_TAG(th);
     if ((state = EXEC_TAG()) == 0) {
 	SAVE_ROOT_JMPBUF(th, { RUBY_VM_CHECK_INTS(th); });
-    }
-    TH_POP_TAG();
 
-    errs[1] = th->errinfo;
-    th->safe_level = 0;
-    ruby_init_stack(&errs[STACK_UPPER(errs, 0, 1)]);
+      step_0: step++;
+	errs[1] = th->errinfo;
+	th->safe_level = 0;
+	ruby_init_stack(&errs[STACK_UPPER(errs, 0, 1)]);
 
-    TH_PUSH_TAG(th);
-    if ((state = EXEC_TAG()) == 0) {
 	SAVE_ROOT_JMPBUF(th, ruby_finalize_0());
-    }
-    TH_POP_TAG();
 
-    /* protect from Thread#raise */
-    th->status = THREAD_KILLED;
+      step_1: step++;
+	/* protect from Thread#raise */
+	th->status = THREAD_KILLED;
 
-    errs[0] = th->errinfo;
-    TH_PUSH_TAG(th);
-    if ((state = EXEC_TAG()) == 0) {
+	errs[0] = th->errinfo;
 	SAVE_ROOT_JMPBUF(th, rb_thread_terminate_all());
     }
-    else if (ex == 0) {
-	ex = state;
+    else {
+	switch (step) {
+	  case 0: goto step_0;
+	  case 1: goto step_1;
+	}
+	if (ex == 0) ex = state;
     }
     th->errinfo = errs[1];
     sysex = error_handle(ex);
@@ -242,7 +242,6 @@ ruby_exec_internal(void *n)
     TH_PUSH_TAG(th);
     if ((state = EXEC_TAG()) == 0) {
 	SAVE_ROOT_JMPBUF(th, {
-	    th->base_block = 0;
 	    rb_iseq_eval_main(iseq);
 	});
     }
@@ -442,9 +441,6 @@ static VALUE get_thread_errinfo(rb_thread_t *th);
 static VALUE
 exc_setup_cause(VALUE exc, VALUE cause)
 {
-    ID id_cause;
-    CONST_ID(id_cause, "cause");
-
 #if SUPPORT_JOKE
     if (NIL_P(cause)) {
 	ID id_true_cause;
@@ -461,6 +457,9 @@ exc_setup_cause(VALUE exc, VALUE cause)
 #endif
     if (!NIL_P(cause) && cause != exc) {
 	rb_ivar_set(exc, id_cause, cause);
+	if (!rb_ivar_defined(cause, id_cause)) {
+	    rb_ivar_set(cause, id_cause, Qnil);
+	}
     }
     return exc;
 }
@@ -469,6 +468,17 @@ static inline int
 sysstack_error_p(VALUE exc)
 {
     return exc == sysstack_error || (!SPECIAL_CONST_P(exc) && RBASIC_CLASS(exc) == rb_eSysStackError);
+}
+
+static inline int
+special_exception_p(rb_thread_t *th, VALUE exc)
+{
+    enum ruby_special_exceptions i;
+    const VALUE *exceptions = th->vm->special_exceptions;
+    for (i = 0; i < ruby_special_error_count; ++i) {
+	if (exceptions[i] == exc) return TRUE;
+    }
+    return FALSE;
 }
 
 static void
@@ -481,17 +491,25 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 
     if (NIL_P(mesg)) {
 	mesg = th->errinfo;
-	if (INTERNAL_EXCEPTION_P(mesg)) JUMP_TAG(TAG_FATAL);
+	if (INTERNAL_EXCEPTION_P(mesg)) TH_JUMP_TAG(th, TAG_FATAL);
 	nocause = 1;
     }
     if (NIL_P(mesg)) {
 	mesg = rb_exc_new(rb_eRuntimeError, 0, 0);
 	nocause = 0;
     }
-    if (cause == Qundef) {
-	cause = nocause ? Qnil : get_thread_errinfo(th);
+    else if (special_exception_p(th, mesg)) {
+	mesg = ruby_vm_special_exception_copy(mesg);
     }
-    exc_setup_cause(mesg, cause);
+    if (cause != Qundef) {
+	exc_setup_cause(mesg, cause);
+    }
+    else if (nocause) {
+	exc_setup_cause(mesg, Qnil);
+    }
+    else if (!rb_ivar_defined(mesg, id_cause)) {
+	exc_setup_cause(mesg, get_thread_errinfo(th));
+    }
 
     file = rb_source_loc(&line);
     if (file && !NIL_P(mesg)) {
@@ -499,20 +517,29 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 	if (sysstack_error_p(mesg)) {
 	    if (NIL_P(rb_attr_get(mesg, idBt))) {
 		at = rb_vm_backtrace_object();
-		if (mesg == sysstack_error) {
-		    mesg = ruby_vm_sysstack_error_copy();
-		}
 		rb_ivar_set(mesg, idBt, at);
 		rb_ivar_set(mesg, idBt_locations, at);
 	    }
 	}
-	else if (NIL_P(get_backtrace(mesg))) {
-	    at = rb_vm_backtrace_object();
-	    if (OBJ_FROZEN(mesg)) {
-		mesg = rb_obj_dup(mesg);
+	else {
+	    int status;
+
+	    TH_PUSH_TAG(th);
+	    if ((status = EXEC_TAG()) == 0) {
+		VALUE bt;
+		if (rb_threadptr_set_raised(th)) goto fatal;
+		bt = rb_get_backtrace(mesg);
+		if (NIL_P(bt)) {
+		    at = rb_vm_backtrace_object();
+		    if (OBJ_FROZEN(mesg)) {
+			mesg = rb_obj_dup(mesg);
+		    }
+		    rb_ivar_set(mesg, idBt_locations, at);
+		    set_backtrace(mesg, at);
+		}
+		rb_threadptr_reset_raised(th);
 	    }
-	    rb_ivar_set(mesg, idBt_locations, at);
-	    set_backtrace(mesg, at);
+	    TH_POP_TAG();
 	}
     }
 
@@ -531,17 +558,18 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 	    e = rb_obj_as_string(mesg);
 	    th->errinfo = mesg;
 	    if (file && line) {
-		warn_printf("Exception `%"PRIsVALUE"' at %s:%d - %"PRIsVALUE"\n",
-			    rb_obj_class(mesg), file, line, e);
+		e = rb_sprintf("Exception `%"PRIsVALUE"' at %s:%d - %"PRIsVALUE"\n",
+			       rb_obj_class(mesg), file, line, e);
 	    }
 	    else if (file) {
-		warn_printf("Exception `%"PRIsVALUE"' at %s - %"PRIsVALUE"\n",
-			    rb_obj_class(mesg), file, e);
+		e = rb_sprintf("Exception `%"PRIsVALUE"' at %s - %"PRIsVALUE"\n",
+			       rb_obj_class(mesg), file, e);
 	    }
 	    else {
-		warn_printf("Exception `%"PRIsVALUE"' - %"PRIsVALUE"\n",
-			    rb_obj_class(mesg), e);
+		e = rb_sprintf("Exception `%"PRIsVALUE"' - %"PRIsVALUE"\n",
+			       rb_obj_class(mesg), e);
 	    }
+	    warn_print_str(e);
 	}
 	TH_POP_TAG();
 	if (status == TAG_FATAL && th->errinfo == exception_error) {
@@ -549,19 +577,31 @@ setup_exception(rb_thread_t *th, int tag, volatile VALUE mesg, VALUE cause)
 	}
 	else if (status) {
 	    rb_threadptr_reset_raised(th);
-	    JUMP_TAG(status);
+	    TH_JUMP_TAG(th, status);
 	}
     }
 
     if (rb_threadptr_set_raised(th)) {
+      fatal:
 	th->errinfo = exception_error;
 	rb_threadptr_reset_raised(th);
-	JUMP_TAG(TAG_FATAL);
+	TH_JUMP_TAG(th, TAG_FATAL);
     }
 
     if (tag != TAG_FATAL) {
 	RUBY_DTRACE_HOOK(RAISE, rb_obj_classname(th->errinfo));
-	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, mesg);
+	EXEC_EVENT_HOOK(th, RUBY_EVENT_RAISE, th->cfp->self, 0, 0, 0, mesg);
+    }
+}
+
+void
+rb_threadptr_setup_exception(rb_thread_t *th, VALUE mesg, VALUE cause)
+{
+    if (cause == Qundef) {
+	cause = get_thread_errinfo(th);
+    }
+    if (cause != mesg) {
+	rb_ivar_set(mesg, id_cause, cause);
     }
 }
 
@@ -571,7 +611,7 @@ rb_longjmp(int tag, volatile VALUE mesg, VALUE cause)
     rb_thread_t *th = GET_THREAD();
     setup_exception(th, tag, mesg, cause);
     rb_thread_raised_clear(th);
-    JUMP_TAG(tag);
+    TH_JUMP_TAG(th, tag);
 }
 
 static VALUE make_exception(int argc, const VALUE *argv, int isstr);
@@ -603,7 +643,7 @@ rb_interrupt(void)
 enum {raise_opt_cause, raise_max_opt};
 
 static int
-extract_raise_opts(int argc, VALUE *argv, VALUE *opts)
+extract_raise_opts(int argc, const VALUE *argv, VALUE *opts)
 {
     int i;
     if (argc > 0) {
@@ -735,13 +775,13 @@ rb_raise_jump(VALUE mesg, VALUE cause)
     VALUE self = cfp->self;
     ID mid = me->called_id;
 
-    th->cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(th->cfp);
-    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, mid, klass, Qnil);
+    rb_vm_pop_frame(th);
+    EXEC_EVENT_HOOK(th, RUBY_EVENT_C_RETURN, self, me->def->original_id, mid, klass, Qnil);
 
     setup_exception(th, TAG_RAISE, mesg, cause);
 
     rb_thread_raised_clear(th);
-    JUMP_TAG(TAG_RAISE);
+    TH_JUMP_TAG(th, TAG_RAISE);
 }
 
 void
@@ -757,12 +797,11 @@ int
 rb_block_given_p(void)
 {
     rb_thread_t *th = GET_THREAD();
-
-    if (rb_vm_control_frame_block_ptr(th->cfp)) {
-	return TRUE;
+    if (rb_vm_frame_block_handler(th->cfp) == VM_BLOCK_HANDLER_NONE) {
+	return FALSE;
     }
     else {
-	return FALSE;
+	return TRUE;
     }
 }
 
@@ -788,7 +827,7 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
 {
     int state;
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = th->cfp;
+    rb_control_frame_t *volatile cfp = th->cfp;
     volatile VALUE result = Qfalse;
     volatile VALUE e_info = th->errinfo;
     va_list args;
@@ -835,7 +874,7 @@ rb_rescue2(VALUE (* b_proc) (ANYARGS), VALUE data1,
     }
     TH_POP_TAG();
     if (state)
-	JUMP_TAG(state);
+	TH_JUMP_TAG(th, state);
 
     return result;
 }
@@ -854,7 +893,7 @@ rb_protect(VALUE (* proc) (VALUE), VALUE data, int * state)
     volatile VALUE result = Qnil;
     volatile int status;
     rb_thread_t *th = GET_THREAD();
-    rb_control_frame_t *cfp = th->cfp;
+    rb_control_frame_t *volatile cfp = th->cfp;
     struct rb_vm_protect_tag protect_tag;
     rb_jmpbuf_t org_jmpbuf;
 
@@ -885,7 +924,7 @@ rb_ensure(VALUE (*b_proc)(ANYARGS), VALUE data1, VALUE (*e_proc)(ANYARGS), VALUE
 {
     int state;
     volatile VALUE result = Qnil;
-    volatile VALUE errinfo;
+    VALUE errinfo;
     rb_thread_t *const th = GET_THREAD();
     rb_ensure_list_t ensure_list;
     ensure_list.entry.marker = 0;
@@ -899,11 +938,14 @@ rb_ensure(VALUE (*b_proc)(ANYARGS), VALUE data1, VALUE (*e_proc)(ANYARGS), VALUE
     }
     TH_POP_TAG();
     errinfo = th->errinfo;
+    if (!NIL_P(errinfo) && !RB_TYPE_P(errinfo, T_OBJECT)) {
+	th->errinfo = Qnil;
+    }
     th->ensure_list=ensure_list.next;
     (*ensure_list.entry.e_proc)(ensure_list.entry.data2);
     th->errinfo = errinfo;
     if (state)
-	JUMP_TAG(state);
+	TH_JUMP_TAG(th, state);
     return result;
 }
 
@@ -1024,6 +1066,7 @@ rb_mod_include(int argc, VALUE *argv, VALUE module)
     CONST_ID(id_append_features, "append_features");
     CONST_ID(id_included, "included");
 
+    rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
     for (i = 0; i < argc; i++)
 	Check_Type(argv[i], T_MODULE);
     while (argc--) {
@@ -1071,6 +1114,8 @@ rb_mod_prepend(int argc, VALUE *argv, VALUE module)
 
     CONST_ID(id_prepend_features, "prepend_features");
     CONST_ID(id_prepended, "prepended");
+
+    rb_check_arity(argc, 1, UNLIMITED_ARGUMENTS);
     for (i = 0; i < argc; i++)
 	Check_Type(argv[i], T_MODULE);
     while (argc--) {
@@ -1078,6 +1123,16 @@ rb_mod_prepend(int argc, VALUE *argv, VALUE module)
 	rb_funcall(argv[argc], id_prepended, 1, module);
     }
     return module;
+}
+
+static void
+ensure_class_or_module(VALUE obj)
+{
+    if (!RB_TYPE_P(obj, T_CLASS) && !RB_TYPE_P(obj, T_MODULE)) {
+	rb_raise(rb_eTypeError,
+		 "wrong argument type %"PRIsVALUE" (expected Class or Module)",
+		 rb_obj_class(obj));
+    }
 }
 
 static VALUE
@@ -1094,7 +1149,7 @@ rb_using_refinement(rb_cref_t *cref, VALUE klass, VALUE module)
 {
     VALUE iclass, c, superclass = klass;
 
-    Check_Type(klass, T_CLASS);
+    ensure_class_or_module(klass);
     Check_Type(module, T_MODULE);
     if (NIL_P(CREF_REFINEMENTS(cref))) {
 	CREF_REFINEMENTS_SET(cref, hidden_identity_hash_new());
@@ -1219,11 +1274,11 @@ add_activated_refinement(VALUE activated_refinements,
 
 /*
  *  call-seq:
- *     refine(klass) { block }   -> module
+ *     refine(mod) { block }   -> module
  *
- *  Refine <i>klass</i> in the receiver.
+ *  Refine <i>mod</i> in the receiver.
  *
- *  Returns an overlaid module.
+ *  Returns a module, where refined methods are defined.
  */
 
 static VALUE
@@ -1234,16 +1289,16 @@ rb_mod_refine(VALUE module, VALUE klass)
        id_refined_class, id_defined_at;
     VALUE refinements, activated_refinements;
     rb_thread_t *th = GET_THREAD();
-    rb_block_t *block = rb_vm_control_frame_block_ptr(th->cfp);
+    VALUE block_handler = rb_vm_frame_block_handler(th->cfp);
 
-    if (!block) {
-        rb_raise(rb_eArgError, "no block given");
+    if (block_handler == VM_BLOCK_HANDLER_NONE) {
+	rb_raise(rb_eArgError, "no block given");
     }
-    if (block->proc) {
-        rb_raise(rb_eArgError,
-		 "can't pass a Proc as a block to Module#refine");
+    if (vm_block_handler_type(block_handler) != block_handler_type_iseq) {
+	rb_raise(rb_eArgError, "can't pass a Proc as a block to Module#refine");
     }
-    Check_Type(klass, T_CLASS);
+
+    ensure_class_or_module(klass);
     CONST_ID(id_refinements, "__refinements__");
     refinements = rb_attr_get(module, id_refinements);
     if (NIL_P(refinements)) {
@@ -1273,6 +1328,16 @@ rb_mod_refine(VALUE module, VALUE klass)
     return refinement;
 }
 
+static void
+ignored_block(VALUE module, const char *klass)
+{
+    const char *anon = "";
+    if (!RTEST(rb_search_class_path(module))) {
+	anon = ", maybe for Module.new";
+    }
+    rb_warn("%s""using doesn't call the given block""%s.", klass, anon);
+}
+
 /*
  *  call-seq:
  *     using(module)    -> self
@@ -1293,15 +1358,71 @@ mod_using(VALUE self, VALUE module)
     if (prev_cfp && prev_cfp->self != self) {
 	rb_raise(rb_eRuntimeError, "Module#using is not called on self");
     }
+    if (rb_block_given_p()) {
+	ignored_block(module, "Module#");
+    }
     rb_using_module(rb_vm_cref_replace_with_duplicated_cref(), module);
     return self;
+}
+
+static int
+used_modules_i(VALUE _, VALUE mod, VALUE ary)
+{
+    ID id_defined_at;
+    CONST_ID(id_defined_at, "__defined_at__");
+    while (FL_TEST(rb_class_of(mod), RMODULE_IS_REFINEMENT)) {
+	rb_ary_push(ary, rb_attr_get(rb_class_of(mod), id_defined_at));
+	mod = RCLASS_SUPER(mod);
+    }
+    return ST_CONTINUE;
+}
+
+/*
+ *  call-seq:
+ *     used_modules -> array
+ *
+ *  Returns an array of all modules used in the current scope. The ordering
+ *  of modules in the resulting array is not defined.
+ *
+ *     module A
+ *       refine Object do
+ *       end
+ *     end
+ *
+ *     module B
+ *       refine Object do
+ *       end
+ *     end
+ *
+ *     using A
+ *     using B
+ *     p Module.used_modules
+ *
+ *  <em>produces:</em>
+ *
+ *     [B, A]
+ */
+static VALUE
+rb_mod_s_used_modules(void)
+{
+    const rb_cref_t *cref = rb_vm_cref();
+    VALUE ary = rb_ary_new();
+
+    while(cref) {
+	if(!NIL_P(CREF_REFINEMENTS(cref))) {
+	    rb_hash_foreach(CREF_REFINEMENTS(cref), used_modules_i, ary);
+	}
+	cref = CREF_NEXT(cref);
+    }
+
+    return rb_funcall(ary, rb_intern("uniq"), 0);
 }
 
 void
 rb_obj_call_init(VALUE obj, int argc, const VALUE *argv)
 {
-    PASS_PASSED_BLOCK();
-    rb_funcall2(obj, idInitialize, argc, argv);
+    PASS_PASSED_BLOCK_HANDLER();
+    rb_funcallv(obj, idInitialize, argc, argv);
 }
 
 void
@@ -1426,25 +1547,28 @@ top_using(VALUE self, VALUE module)
     if (CREF_NEXT(cref) || (prev_cfp && rb_vm_frame_method_entry(prev_cfp))) {
 	rb_raise(rb_eRuntimeError, "main.using is permitted only at toplevel");
     }
+    if (rb_block_given_p()) {
+	ignored_block(module, "main.");
+    }
     rb_using_module(rb_vm_cref_replace_with_duplicated_cref(), module);
     return self;
 }
 
-static VALUE *
+static const VALUE *
 errinfo_place(rb_thread_t *th)
 {
     rb_control_frame_t *cfp = th->cfp;
     rb_control_frame_t *end_cfp = RUBY_VM_END_CONTROL_FRAME(th);
 
     while (RUBY_VM_VALID_CONTROL_FRAME_P(cfp, end_cfp)) {
-	if (RUBY_VM_NORMAL_ISEQ_P(cfp->iseq)) {
+	if (VM_FRAME_RUBYFRAME_P(cfp)) {
 	    if (cfp->iseq->body->type == ISEQ_TYPE_RESCUE) {
-		return &cfp->ep[-2];
+		return &cfp->ep[VM_ENV_INDEX_LAST_LVAR];
 	    }
 	    else if (cfp->iseq->body->type == ISEQ_TYPE_ENSURE &&
-		     !THROW_DATA_P(cfp->ep[-2]) &&
-		     !FIXNUM_P(cfp->ep[-2])) {
-		return &cfp->ep[-2];
+		     !THROW_DATA_P(cfp->ep[VM_ENV_INDEX_LAST_LVAR]) &&
+		     !FIXNUM_P(cfp->ep[VM_ENV_INDEX_LAST_LVAR])) {
+		return &cfp->ep[VM_ENV_INDEX_LAST_LVAR];
 	    }
 	}
 	cfp = RUBY_VM_PREVIOUS_CONTROL_FRAME(cfp);
@@ -1455,7 +1579,7 @@ errinfo_place(rb_thread_t *th)
 static VALUE
 get_thread_errinfo(rb_thread_t *th)
 {
-    VALUE *ptr = errinfo_place(th);
+    const VALUE *ptr = errinfo_place(th);
     if (ptr) {
 	return *ptr;
     }
@@ -1484,7 +1608,7 @@ errinfo_setter(VALUE val, ID id, VALUE *var)
 	rb_raise(rb_eTypeError, "assigning non-exception to $!");
     }
     else {
-	VALUE *ptr = errinfo_place(GET_THREAD());
+	const VALUE *ptr = errinfo_place(GET_THREAD());
 	if (ptr) {
 	    *ptr = val;
 	}
@@ -1522,7 +1646,7 @@ errat_getter(ID id)
 {
     VALUE err = get_errinfo();
     if (!NIL_P(err)) {
-	return get_backtrace(err);
+	return rb_get_backtrace(err);
     }
     else {
 	return Qnil;
@@ -1628,6 +1752,8 @@ Init_eval(void)
     rb_define_private_method(rb_cModule, "prepend_features", rb_mod_prepend_features, 1);
     rb_define_private_method(rb_cModule, "refine", rb_mod_refine, 1);
     rb_define_private_method(rb_cModule, "using", mod_using, 1);
+    rb_define_singleton_method(rb_cModule, "used_modules",
+			       rb_mod_s_used_modules, 0);
     rb_undef_method(rb_cClass, "refine");
 
     rb_undef_method(rb_cClass, "module_function");
@@ -1652,4 +1778,5 @@ Init_eval(void)
 
     id_signo = rb_intern_const("signo");
     id_status = rb_intern_const("status");
+    id_cause = rb_intern_const("cause");
 }

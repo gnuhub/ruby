@@ -1,4 +1,5 @@
 # coding: US-ASCII
+# frozen_string_literal: false
 require 'test/unit'
 require 'net/http'
 require 'stringio'
@@ -13,7 +14,7 @@ class TestNetHTTP < Test::Unit::TestCase
 
     proxy_class = Net::HTTP.Proxy 'proxy.example', 8000, 'user', 'pass'
 
-    refute_equal Net::HTTP, proxy_class
+    assert_not_equal Net::HTTP, proxy_class
 
     assert_operator proxy_class, :<, Net::HTTP
 
@@ -22,9 +23,9 @@ class TestNetHTTP < Test::Unit::TestCase
     assert_equal 'user',          proxy_class.proxy_user
     assert_equal 'pass',          proxy_class.proxy_pass
 
-    http = proxy_class.new 'example'
+    http = proxy_class.new 'hostname.example'
 
-    refute http.proxy_from_env?
+    assert_not_predicate http, :proxy_from_env?
 
 
     proxy_class = Net::HTTP.Proxy 'proxy.example'
@@ -42,7 +43,7 @@ class TestNetHTTP < Test::Unit::TestCase
 
       proxy_class = Net::HTTP.Proxy :ENV
 
-      refute_equal Net::HTTP, proxy_class
+      assert_not_equal Net::HTTP, proxy_class
 
       assert_operator proxy_class, :<, Net::HTTP
 
@@ -50,16 +51,16 @@ class TestNetHTTP < Test::Unit::TestCase
       assert_nil proxy_class.proxy_user
       assert_nil proxy_class.proxy_pass
 
-      refute_equal 8000, proxy_class.proxy_port
+      assert_not_equal 8000, proxy_class.proxy_port
 
-      http = proxy_class.new 'example'
+      http = proxy_class.new 'hostname.example'
 
       assert http.proxy_from_env?
     end
   end
 
   def test_edit_path
-    http = Net::HTTP.new 'example', nil, nil
+    http = Net::HTTP.new 'hostname.example', nil, nil
 
     edited = http.send :edit_path, '/path'
 
@@ -73,11 +74,11 @@ class TestNetHTTP < Test::Unit::TestCase
   end
 
   def test_edit_path_proxy
-    http = Net::HTTP.new 'example', nil, 'proxy.example'
+    http = Net::HTTP.new 'hostname.example', nil, 'proxy.example'
 
     edited = http.send :edit_path, '/path'
 
-    assert_equal 'http://example/path', edited
+    assert_equal 'http://hostname.example/path', edited
 
     http.use_ssl = true
 
@@ -88,11 +89,22 @@ class TestNetHTTP < Test::Unit::TestCase
 
   def test_proxy_address
     clean_http_proxy_env do
-      http = Net::HTTP.new 'example', nil, 'proxy.example'
+      http = Net::HTTP.new 'hostname.example', nil, 'proxy.example'
       assert_equal 'proxy.example', http.proxy_address
 
-      http = Net::HTTP.new 'example', nil
+      http = Net::HTTP.new 'hostname.example', nil
       assert_equal nil, http.proxy_address
+    end
+  end
+
+  def test_proxy_from_env_ENV
+    clean_http_proxy_env do
+      ENV['http_proxy'] = 'http://proxy.example:8000'
+
+      assert_equal false, Net::HTTP.proxy_class?
+      http = Net::HTTP.new 'hostname.example'
+
+      assert_equal true, http.proxy_from_env?
     end
   end
 
@@ -100,7 +112,7 @@ class TestNetHTTP < Test::Unit::TestCase
     clean_http_proxy_env do
       ENV['http_proxy'] = 'http://proxy.example:8000'
 
-      http = Net::HTTP.new 'example'
+      http = Net::HTTP.new 'hostname.example'
 
       assert_equal 'proxy.example', http.proxy_address
     end
@@ -108,7 +120,7 @@ class TestNetHTTP < Test::Unit::TestCase
 
   def test_proxy_eh_no_proxy
     clean_http_proxy_env do
-      assert_equal false, Net::HTTP.new('example', nil, nil).proxy?
+      assert_equal false, Net::HTTP.new('hostname.example', nil, nil).proxy?
     end
   end
 
@@ -116,7 +128,7 @@ class TestNetHTTP < Test::Unit::TestCase
     clean_http_proxy_env do
       ENV['http_proxy'] = 'http://proxy.example:8000'
 
-      http = Net::HTTP.new 'example'
+      http = Net::HTTP.new 'hostname.example'
 
       assert_equal true, http.proxy?
     end
@@ -124,27 +136,27 @@ class TestNetHTTP < Test::Unit::TestCase
 
   def test_proxy_eh_ENV_none_set
     clean_http_proxy_env do
-      assert_equal false, Net::HTTP.new('example').proxy?
+      assert_equal false, Net::HTTP.new('hostname.example').proxy?
     end
   end
 
   def test_proxy_eh_ENV_no_proxy
     clean_http_proxy_env do
       ENV['http_proxy'] = 'http://proxy.example:8000'
-      ENV['no_proxy']   = 'example'
+      ENV['no_proxy']   = 'hostname.example'
 
-      assert_equal false, Net::HTTP.new('example').proxy?
+      assert_equal false, Net::HTTP.new('hostname.example').proxy?
     end
   end
 
   def test_proxy_port
     clean_http_proxy_env do
-      http = Net::HTTP.new 'exmaple', nil, 'proxy.example'
+      http = Net::HTTP.new 'example', nil, 'proxy.example'
       assert_equal 'proxy.example', http.proxy_address
       assert_equal 80, http.proxy_port
-      http = Net::HTTP.new 'exmaple', nil, 'proxy.example', 8000
+      http = Net::HTTP.new 'example', nil, 'proxy.example', 8000
       assert_equal 8000, http.proxy_port
-      http = Net::HTTP.new 'exmaple', nil
+      http = Net::HTTP.new 'example', nil
       assert_equal nil, http.proxy_port
     end
   end
@@ -153,7 +165,7 @@ class TestNetHTTP < Test::Unit::TestCase
     clean_http_proxy_env do
       ENV['http_proxy'] = 'http://proxy.example:8000'
 
-      http = Net::HTTP.new 'example'
+      http = Net::HTTP.new 'hostname.example'
 
       assert_equal 8000, http.proxy_port
     end
@@ -163,7 +175,7 @@ class TestNetHTTP < Test::Unit::TestCase
     clean_http_proxy_env do
       ENV['http_proxy'] = 'http://proxy.example:8000'
 
-      http = Net::HTTP.newobj 'example'
+      http = Net::HTTP.newobj 'hostname.example'
 
       assert_equal false, http.proxy?
     end
@@ -303,6 +315,17 @@ module TestNetHTTP_version_1_1_methods
     assert_equal $test_net_http_data, res.body
   end
 
+  def test_get__crlf
+    start {|http|
+      assert_raise(ArgumentError) do
+        http.get("\r")
+      end
+      assert_raise(ArgumentError) do
+        http.get("\n")
+      end
+    }
+  end
+
   def test_get2
     start {|http|
       http.get2('/') {|res|
@@ -359,6 +382,22 @@ module TestNetHTTP_version_1_1_methods
         assert_not_equal '411', res.code
       end
     end
+  end
+
+  def test_s_post
+    url = "http://#{config('host')}:#{config('port')}/"
+    res = Net::HTTP.post(
+              URI.parse(url),
+              "a=x")
+    assert_equal "application/x-www-form-urlencoded", res["Content-Type"]
+    assert_equal "a=x", res.body
+
+    res = Net::HTTP.post(
+              URI.parse(url),
+              "hello world",
+              "Content-Type" => "text/plain; charset=US-ASCII")
+    assert_equal "text/plain; charset=US-ASCII", res["Content-Type"]
+    assert_equal "hello world", res.body
   end
 
   def test_s_post_form
@@ -476,7 +515,7 @@ module TestNetHTTP_version_1_2_methods
       assert_equal $test_net_http_data.size, res.body.size
       assert_equal $test_net_http_data, res.body
 
-      refute res.decode_content, 'Bug #7831' if Net::HTTP::HAVE_ZLIB
+      assert_not_predicate res, :decode_content, 'Bug #7831' if Net::HTTP::HAVE_ZLIB
     }
   end
 
@@ -543,48 +582,48 @@ module TestNetHTTP_version_1_2_methods
   end
 
   def _test_request__path(http)
-    uri = URI 'https://example/'
+    uri = URI 'https://hostname.example/'
     req = Net::HTTP::Get.new('/')
 
     res = http.request(req)
 
     assert_kind_of URI::Generic, req.uri
 
-    refute_equal uri, req.uri
+    assert_not_equal uri, req.uri
 
     assert_equal uri, res.uri
 
-    refute_same uri,     req.uri
-    refute_same req.uri, res.uri
+    assert_not_same uri,     req.uri
+    assert_not_same req.uri, res.uri
   end
 
   def _test_request__uri(http)
-    uri = URI 'https://example/'
+    uri = URI 'https://hostname.example/'
     req = Net::HTTP::Get.new(uri)
 
     res = http.request(req)
 
     assert_kind_of URI::Generic, req.uri
 
-    refute_equal uri, req.uri
+    assert_not_equal uri, req.uri
 
     assert_equal req.uri, res.uri
 
-    refute_same uri,     req.uri
-    refute_same req.uri, res.uri
+    assert_not_same uri,     req.uri
+    assert_not_same req.uri, res.uri
   end
 
   def _test_request__uri_host(http)
     uri = URI 'http://other.example/'
 
     req = Net::HTTP::Get.new(uri)
-    req['host'] = 'example'
+    req['host'] = 'hostname.example'
 
     res = http.request(req)
 
     assert_kind_of URI::Generic, req.uri
 
-    assert_equal URI("http://example:#{http.port}"), res.uri
+    assert_equal URI("http://hostname.example:#{http.port}"), res.uri
   end
 
   def test_send_request
@@ -868,6 +907,39 @@ class TestNetHTTPContinue < Test::Unit::TestCase
     }
     assert_match(/Expect: 100-continue/, @debug.string)
     assert_not_match(/HTTP\/1.1 100 continue/, @debug.string)
+  end
+end
+
+class TestNetHTTPSwitchingProtocols < Test::Unit::TestCase
+  CONFIG = {
+    'host' => '127.0.0.1',
+    'proxy_host' => nil,
+    'proxy_port' => nil,
+    'chunked' => true,
+  }
+
+  include TestNetHTTPUtils
+
+  def logfile
+    @debug = StringIO.new('')
+  end
+
+  def mount_proc(&block)
+    @server.mount('/continue', WEBrick::HTTPServlet::ProcHandler.new(block.to_proc))
+  end
+
+  def test_info
+    mount_proc {|req, res|
+      req.instance_variable_get(:@socket) << "HTTP/1.1 101 Switching Protocols\r\n\r\n"
+      res.body = req.query['body']
+    }
+    start {|http|
+      http.continue_timeout = 0.2
+      http.request_post('/continue', 'body=BODY') {|res|
+        assert_equal('BODY', res.read_body)
+      }
+    }
+    assert_match(/HTTP\/1.1 101 Switching Protocols/, @debug.string)
   end
 end
 

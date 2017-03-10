@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'win32/importer'
 
 module Win32
@@ -332,11 +333,11 @@ For detail, see the MSDN[http://msdn.microsoft.com/library/en-us/sysinfo/base/pr
       end
 
       def DeleteValue(hkey, name)
-        check RegDeleteValue.call(hkey, make_wstr(name))
+        check RegDeleteValueW.call(hkey, make_wstr(name))
       end
 
       def DeleteKey(hkey, name)
-        check RegDeleteKey.call(hkey, make_wstr(name))
+        check RegDeleteKeyW.call(hkey, make_wstr(name))
       end
 
       def FlushKey(hkey)
@@ -642,7 +643,9 @@ For detail, see the MSDN[http://msdn.microsoft.com/library/en-us/sysinfo/base/pr
     def read(name, *rtype)
       type, data = API.QueryValue(@hkey, name)
       unless rtype.empty? or rtype.include?(type)
-        raise TypeError, "Type mismatch (expect #{rtype.inspect} but #{type} present)"
+        raise TypeError, "Type mismatch (expect [#{
+          rtype.map{|t|Registry.type2name(t)}.join(', ')}] but #{
+          Registry.type2name(type)} present)"
       end
       case type
       when REG_SZ, REG_EXPAND_SZ
@@ -658,7 +661,7 @@ For detail, see the MSDN[http://msdn.microsoft.com/library/en-us/sysinfo/base/pr
       when REG_QWORD
         [ type, API.unpackqw(data) ]
       else
-        raise TypeError, "Type #{type} is not supported."
+        raise TypeError, "Type #{Registry.type2name(type)} is not supported."
       end
     end
 
@@ -681,7 +684,7 @@ For detail, see the MSDN[http://msdn.microsoft.com/library/en-us/sysinfo/base/pr
       when REG_EXPAND_SZ
         Registry.expand_environ(data)
       else
-        raise TypeError, "Type #{type} is not supported."
+        raise TypeError, "Type #{Registry.type2name(type)} is not supported."
       end
     end
 
@@ -754,7 +757,7 @@ For detail, see the MSDN[http://msdn.microsoft.com/library/en-us/sysinfo/base/pr
       when REG_QWORD
         data = API.packqw(data.to_i)
       else
-        raise TypeError, "Unsupported type #{type}"
+        raise TypeError, "Unsupported type #{Registry.type2name(type)}"
       end
       API.SetValue(@hkey, name, type, data, data.bytesize + termsize)
     end

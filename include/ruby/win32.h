@@ -127,7 +127,7 @@ typedef unsigned int uintptr_t;
 
 #define WNOHANG -1
 
-#define O_SHARE_DELETE 0x80000000 /* for rb_w32_open(), rb_w32_wopen() */
+#define O_SHARE_DELETE 0x20000000 /* for rb_w32_open(), rb_w32_wopen() */
 
 typedef int clockid_t;
 #define CLOCK_REALTIME  0
@@ -233,6 +233,7 @@ struct ifaddrs {
 #define IFF_POINTOPOINT IFF_POINTTOPOINT
 #endif
 
+extern void   rb_w32_sysinit(int *, char ***);
 extern DWORD  rb_w32_osid(void);
 extern rb_pid_t  rb_w32_pipe_exec(const char *, const char *, int, int *, int *);
 extern int    flock(int fd, int oper);
@@ -403,8 +404,9 @@ __declspec(dllimport) extern int finite(double);
 
 #define SUFFIX
 
-extern int 	 rb_w32_ftruncate(int fd, off_t length);
-extern int 	 rb_w32_truncate(const char *path, off_t length);
+extern int rb_w32_ftruncate(int fd, off_t length);
+extern int rb_w32_truncate(const char *path, off_t length);
+extern int rb_w32_utruncate(const char *path, off_t length);
 
 #undef HAVE_FTRUNCATE
 #define HAVE_FTRUNCATE 1
@@ -751,7 +753,8 @@ uintptr_t rb_w32_asynchronize(asynchronous_func_t func, uintptr_t self, int argc
 
 RUBY_SYMBOL_EXPORT_END
 
-#ifdef __MINGW_ATTRIB_PURE
+#if (defined(__MINGW64_VERSION_MAJOR) || defined(__MINGW64__)) && !defined(__cplusplus)
+#ifdef RUBY_MINGW64_BROKEN_FREXP_MODF
 /* License: Ruby's */
 /* get rid of bugs in math.h of mingw */
 #define frexp(_X, _Y) __extension__ ({\
@@ -769,13 +772,6 @@ RUBY_SYMBOL_EXPORT_END
 })
 #endif
 
-#if defined(__cplusplus)
-#if 0
-{ /* satisfy cc-mode */
-#endif
-}  /* extern "C" { */
-#endif
-
 #if defined(__MINGW64__)
 /*
  * Use powl() instead of broken pow() of x86_64-w64-mingw32.
@@ -790,8 +786,14 @@ rb_w32_pow(double x, double y)
 #elif defined(__MINGW64_VERSION_MAJOR)
 double rb_w32_pow(double x, double y);
 #endif
-#if defined(__MINGW64_VERSION_MAJOR) || defined(__MINGW64__)
 #define pow rb_w32_pow
+#endif
+
+#if defined(__cplusplus)
+#if 0
+{ /* satisfy cc-mode */
+#endif
+}  /* extern "C" { */
 #endif
 
 #endif /* RUBY_WIN32_H */

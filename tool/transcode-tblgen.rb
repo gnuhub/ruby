@@ -725,13 +725,13 @@ def citrus_decode_mapsrc(ces, csid, mapsrcs)
     path << ".src"
     path[path.rindex('/')] = '%'
     STDERR.puts 'load mapsrc %s' % path if VERBOSE_MODE
-    open(path) do |f|
+    open(path, 'rb') do |f|
       f.each_line do |l|
         break if /^BEGIN_MAP/ =~ l
       end
       f.each_line do |l|
         next if /^\s*(?:#|$)/ =~ l
-          break if /^END_MAP/ =~ l
+        break if /^END_MAP/ =~ l
         case mode
         when :from_ucs
           case l
@@ -740,14 +740,14 @@ def citrus_decode_mapsrc(ces, csid, mapsrcs)
           when /(0x\w+)\s*=\s*(0x\w+)/
             table.push << [plane | $1.hex, citrus_cstomb(ces, csid, $2.hex)]
           else
-            raise "unknown notation '%s'"% l
+            raise "unknown notation '%s'"% l.chomp
           end
         when :to_ucs
           case l
           when /(0x\w+)\s*=\s*(0x\w+)/
             table.push << [citrus_cstomb(ces, csid, $1.hex), plane | $2.hex]
           else
-            raise "unknown notation '%s'"% l
+            raise "unknown notation '%s'"% l.chomp
           end
         end
       end
@@ -842,7 +842,45 @@ def transcode_tbl_only(from, to, map, valid_encoding=UnspecifiedValidEncoding)
   return map, tree_name, real_tree_name, max_input
 end
 
-def transcode_tblgen(from, to, map, valid_encoding=UnspecifiedValidEncoding)
+#
+# call-seq:
+#   transcode_tblgen(from_name, to_name, map [, valid_encoding_check [, ascii_compatibility]]) -> ''
+#
+# Returns an empty string just in case the result is used somewhere.
+# Stores the actual product for later output with transcode_generated_code and
+# transcode_register_code.
+#
+# The first argument is a string that will be used for the source (from) encoding.
+# The second argument is a string that will be used for the target (to) encoding.
+#
+# The third argument is the actual data, a map represented as an array of two-element
+# arrays. Each element of the array stands for one character being converted. The
+# first element of each subarray is the code of the character in the source encoding,
+# the second element of each subarray is the code of the character in the target encoding.
+#
+# Each code (i.e. byte sequence) is represented as a string of hexadecimal characters
+# of even length. Codes can also be represented as integers (usually in the form Ox...),
+# in which case they are interpreted as Unicode codepoints encoded in UTF-8. So as
+# an example, 0x677E is the same as "E69DBE" (but somewhat easier to produce and check).
+#
+# In addition, the following symbols can also be used instead of actual codes in the
+# second element of a subarray:
+# :nomap (no mapping, just copy input to output), :nomap0 (same as :nomap, but low priority),
+# :undef (input code undefined in the destination encoding),
+# :invalid (input code is an invalid byte sequence in the source encoding),
+# :func_ii, :func_si, :func_io, :func_so (conversion by function with specific call
+# convention).
+#
+# The forth argument specifies the overall structure of the encoding. For examples,
+# see ValidEncoding below. This is used to cross-check the data in the third argument
+# and to automatically add :undef and :invalid mappings where necessary.
+#
+# The fifth argument gives the ascii-compatibility of the transcoding. See
+# rb_transcoder_asciicompat_type_t in transcode_data.h for details. In most
+# cases, this argument can be left out.
+#
+def transcode_tblgen(from, to, map, valid_encoding=UnspecifiedValidEncoding,
+                     ascii_compatibility='asciicompat_converter')
   map, tree_name, real_tree_name, max_input = transcode_tbl_only(from, to, map, valid_encoding)
   transcoder_name = "rb_#{tree_name}"
   TRANSCODERS << transcoder_name
@@ -856,7 +894,7 @@ static const rb_transcoder
     #{input_unit_length}, /* input_unit_length */
     #{max_input}, /* max_input */
     #{max_output}, /* max_output */
-    asciicompat_converter, /* asciicompat_type */
+    #{ascii_compatibility}, /* asciicompat_type */
     0, NULL, NULL, /* state_size, state_init, state_fini */
     NULL, NULL, NULL, NULL,
     NULL, NULL, NULL
@@ -993,7 +1031,7 @@ if __FILE__ == $0
   VERBOSE_MODE = verbose_mode
 
   OUTPUT_FILENAME = output_filename
-  OUTPUT_PREFIX = output_filename ? File.basename(output_filename)[/\A[A-Za-z0-9_]*/] : ""
+  OUTPUT_PREFIX = output_filename ? File.basename(output_filename)[/\A[A-Za-z0-9_]*/] : "".dup
   OUTPUT_PREFIX.sub!(/\A_+/, '')
   OUTPUT_PREFIX.sub!(/_*\z/, '_')
 

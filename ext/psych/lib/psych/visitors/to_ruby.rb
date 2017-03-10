@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'psych/scalar_scanner'
 require 'psych/class_loader'
 require 'psych/exception'
@@ -69,11 +70,11 @@ module Psych
             o.value
           end
         when '!ruby/object:BigDecimal'
-          require 'bigdecimal'
+          require 'bigdecimal' unless defined? BigDecimal
           class_loader.big_decimal._load o.value
         when "!ruby/object:DateTime"
           class_loader.date_time
-          require 'date'
+          require 'date' unless defined? DateTime
           @ss.parse_time(o.value).to_datetime
         when '!ruby/encoding'
           ::Encoding.find o.value
@@ -330,12 +331,13 @@ module Psych
         list
       end
 
+      SHOVEL = '<<'
       def revive_hash hash, o
         o.children.each_slice(2) { |k,v|
           key = accept(k)
           val = accept(v)
 
-          if key == '<<' && k.tag != "tag:yaml.org,2002:str"
+          if key == SHOVEL && k.tag != "tag:yaml.org,2002:str"
             case v
             when Nodes::Alias, Nodes::Mapping
               begin

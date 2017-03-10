@@ -1,4 +1,5 @@
 # -*- coding: us-ascii -*-
+# frozen-string-literal: false
 # module to create Makefile for extension modules
 # invoke like: ruby -r mkmf extconf.rb
 
@@ -175,7 +176,7 @@ module MakeMakefile
   ]
 
   def install_dirs(target_prefix = nil)
-    if $extout
+    if $extout and $extmk
       dirs = [
         ['BINDIR',        '$(extout)/bin'],
         ['RUBYCOMMONDIR', '$(extout)/common'],
@@ -249,6 +250,7 @@ module MakeMakefile
 
   OUTFLAG = CONFIG['OUTFLAG']
   COUTFLAG = CONFIG['COUTFLAG']
+  CSRCFLAG = CONFIG['CSRCFLAG']
   CPPOUTFILE = config_string('CPPOUTFILE') {|str| str.sub(/\bconftest\b/, CONFTEST)}
 
   def rm_f(*files)
@@ -462,7 +464,6 @@ MSG
       xsystem(command, *opts)
     ensure
       log_src(src)
-      MakeMakefile.rm_rf "#{CONFTEST}.dSYM"
     end
   end
 
@@ -525,6 +526,7 @@ MSG
   end
 
   def try_link0(src, opt="", *opts, &b) # :nodoc:
+    exe = CONFTEST+$EXEEXT
     cmd = link_command("", opt)
     if $universal
       require 'tmpdir'
@@ -538,7 +540,10 @@ MSG
       end
     else
       try_do(src, cmd, *opts, &b)
-    end and File.executable?(CONFTEST+$EXEEXT)
+    end and File.executable?(exe) or return nil
+    exe
+  ensure
+    MakeMakefile.rm_rf(*Dir["#{CONFTEST}*"]-[exe])
   end
 
   # Returns whether or not the +src+ can be compiled as a C source and linked
@@ -552,9 +557,9 @@ MSG
   # [+src+] a String which contains a C source
   # [+opt+] a String which contains linker options
   def try_link(src, opt="", *opts, &b)
-    try_link0(src, opt, *opts, &b)
-  ensure
-    MakeMakefile.rm_f "#{CONFTEST}*", "c0x32*"
+    exe = try_link0(src, opt, *opts, &b) or return false
+    MakeMakefile.rm_f exe
+    true
   end
 
   # Returns whether or not the +src+ can be compiled as a C source.  +opt+ is
@@ -602,7 +607,7 @@ MSG
 
   def with_cppflags(flags)
     cppflags = $CPPFLAGS
-    $CPPFLAGS = flags
+    $CPPFLAGS = flags.dup
     ret = yield
   ensure
     $CPPFLAGS = cppflags unless ret
@@ -624,7 +629,7 @@ MSG
 
   def with_cflags(flags)
     cflags = $CFLAGS
-    $CFLAGS = flags
+    $CFLAGS = flags.dup
     ret = yield
   ensure
     $CFLAGS = cflags unless ret
@@ -646,7 +651,7 @@ MSG
 
   def with_ldflags(flags)
     ldflags = $LDFLAGS
-    $LDFLAGS = flags
+    $LDFLAGS = flags.dup
     ret = yield
   ensure
     $LDFLAGS = ldflags unless ret
@@ -728,7 +733,7 @@ int main() {printf("%"PRI_CONFTEST_PREFIX"#{neg ? 'd' : 'u'}\\n", conftest_const
           end
         end
       ensure
-        MakeMakefile.rm_f "#{CONFTEST}*"
+        MakeMakefile.rm_f "#{CONFTEST}#{$EXEEXT}"
       end
     end
     nil
@@ -747,6 +752,8 @@ int main() {printf("%"PRI_CONFTEST_PREFIX"#{neg ? 'd' : 'u'}\\n", conftest_const
       decltype = proc {|x|"const volatile void *#{x}"}
     when /\)$/
       call = func
+    when nil
+      call = ""
     else
       call = "#{func}()"
       decltype = proc {|x| "void ((*#{x})())"}
@@ -939,10 +946,10 @@ SRC
     a = r = nil
     Logging::postpone do
       r = yield
-      a = (fmt ? "#{fmt % r}" : r ? "yes" : "no") << "\n"
-      "#{f}#{m}-------------------- #{a}\n"
+      a = (fmt ? "#{fmt % r}" : r ? "yes" : "no")
+      "#{f}#{m}-------------------- #{a}\n\n"
     end
-    message(a)
+    message "%s\n", a
     Logging::message "--------------------\n\n"
     r
   end
@@ -955,7 +962,10 @@ SRC
             break noun = noun.send(meth, *args)
           end
         end
-        msg << " #{pre} #{noun}" unless noun.empty?
+        unless noun.empty?
+          msg << " #{pre} " unless msg.empty?
+          msg << noun
+        end
       end
       msg
     end
@@ -986,9 +996,8 @@ SRC
   # <code>--with-FOOlib</code> configuration option.
   #
   def have_library(lib, func = nil, headers = nil, opt = "", &b)
-    func = "main" if !func or func.empty?
     lib = with_config(lib+'lib', lib)
-    checking_for checking_message(func.funcall_style, LIBARG%lib, opt) do
+    checking_for checking_message(func && func.funcall_style, LIBARG%lib, opt) do
       if COMMON_LIBS.include?(lib)
         true
       else
@@ -1012,10 +1021,9 @@ SRC
   # library paths searched and linked against.
   #
   def find_library(lib, func, *paths, &b)
-    func = "main" if !func or func.empty?
     lib = with_config(lib+'lib', lib)
     paths = paths.collect {|path| path.split(File::PATH_SEPARATOR)}.flatten
-    checking_for checking_message(func.funcall_style, LIBARG%lib) do
+    checking_for checking_message(func && func.funcall_style, LIBARG%lib) do
       libpath = $LIBPATH
       libs = append_library($libs, lib)
       begin
@@ -1367,7 +1375,7 @@ SRC
   # _convertible_ means actually the same type, or typedef'd from the same
   # type.
   #
-  # If the +type+ is a integer type and the _convertible_ type is found,
+  # If the +type+ is an integer type and the _convertible_ type is found,
   # the following macros are passed as preprocessor constants to the compiler
   # using the +type+ name, in uppercase.
   #
@@ -1550,6 +1558,7 @@ SRC
     end
     file = nil
     path.each do |dir|
+      dir.sub!(/\A"(.*)"\z/m, '\1') if $mswin or $mingw
       return file if executable_file.call(file = File.join(dir, bin))
       if exts
         exts.each {|ext| executable_file.call(ext = file + ext) and return ext}
@@ -1786,7 +1795,7 @@ SRC
     elsif ($PKGCONFIG ||=
            (pkgconfig = with_config("pkg-config", ("pkg-config" unless CROSS_COMPILING))) &&
            find_executable0(pkgconfig) && pkgconfig) and
-        system("#{$PKGCONFIG} --exists #{pkg}")
+        xsystem("#{$PKGCONFIG} --exists #{pkg}")
       # default to pkg-config command
       pkgconfig = $PKGCONFIG
       get = proc {|opt|
@@ -1894,8 +1903,8 @@ SHELL = /bin/sh
 V = 0
 Q1 = $(V:1=)
 Q = $(Q1:0=@)
-ECHO1 = $(V:1=@#{CONFIG['NULLCMD']})
-ECHO = $(ECHO1:0=@echo)
+ECHO1 = $(V:1=@ #{CONFIG['NULLCMD']})
+ECHO = $(ECHO1:0=@ echo)
 NULLCMD = #{CONFIG['NULLCMD']}
 
 #### Start of system configuration section. ####
@@ -1935,6 +1944,7 @@ VPATH = #{vpath.join(CONFIG['PATH_SEPARATOR'])}
     extconf_h = $extconf_h ? "-DRUBY_EXTCONF_H=\\\"$(RUBY_EXTCONF_H)\\\" " : $defs.join(" ") << " "
     headers = %w[
       $(hdrdir)/ruby.h
+      $(hdrdir)/ruby/backward.h
       $(hdrdir)/ruby/ruby.h
       $(hdrdir)/ruby/defines.h
       $(hdrdir)/ruby/missing.h
@@ -1942,6 +1952,7 @@ VPATH = #{vpath.join(CONFIG['PATH_SEPARATOR'])}
       $(hdrdir)/ruby/st.h
       $(hdrdir)/ruby/subst.h
     ]
+    headers += $headers
     if RULE_SUBST
       headers.each {|h| h.sub!(/.*/, &RULE_SUBST.method(:%))}
     end
@@ -1958,6 +1969,7 @@ LIBRUBYARG_STATIC = #$LIBRUBYARG_STATIC
 empty =
 OUTFLAG = #{OUTFLAG}$(empty)
 COUTFLAG = #{COUTFLAG}$(empty)
+CSRCFLAG = #{CSRCFLAG}$(empty)
 
 RUBY_EXTCONF_H = #{$extconf_h}
 cflags   = #{CONFIG['cflags']}
@@ -2006,28 +2018,21 @@ TOUCH = exit >
 
 preload = #{defined?($preload) && $preload ? $preload.join(' ') : ''}
 }
-    if $nmake == ?b
-      mk.each do |x|
-        x.gsub!(/^(MAKEDIRS|INSTALL_(?:PROG|DATA))+\s*=.*\n/) do
-          "!ifndef " + $1 + "\n" +
-          $& +
-          "!endif\n"
-        end
-      end
-    end
     mk
   end
 
   def timestamp_file(name, target_prefix = nil)
-    if target_prefix
-      pat = []
-      install_dirs.each do |n, d|
-        pat << n if /\$\(target_prefix\)\z/ =~ d
-      end
-      name = name.gsub(/\$\((#{pat.join("|")})\)/) {$&+target_prefix}
+    pat = {}
+    name = '$(RUBYARCHDIR)' if name == '$(TARGET_SO_DIR)'
+    install_dirs.each do |n, d|
+      pat[n] = $` if /\$\(target_prefix\)\z/ =~ d
     end
+    name = name.gsub(/\$\((#{pat.keys.join("|")})\)/) {pat[$1]+target_prefix}
+    name.sub!(/(\$\((?:site)?arch\))\/*/, '')
+    arch = $1 || ''
+    name.chomp!('/')
     name = name.gsub(/(\$[({]|[})])|(\/+)|[^-.\w]+/) {$1 ? "" : $2 ? ".-." : "_"}
-    "$(TIMESTAMP_DIR)/.#{name}.time"
+    File.join("$(TIMESTAMP_DIR)", arch, "#{name.sub(/\A(?=.)/, '.')}.time")
   end
   # :startdoc:
 
@@ -2039,6 +2044,7 @@ CLEANFILES = #{$cleanfiles.join(' ')}
 DISTCLEANFILES = #{$distcleanfiles.join(' ')}
 
 all install static install-so install-rb: Makefile
+	@$(NULLCMD)
 .PHONY: all install static install-so install-rb
 .PHONY: clean clean-so clean-static clean-rb
 
@@ -2199,11 +2205,15 @@ RULES
     RbConfig.expand(srcdir = srcprefix.dup)
 
     ext = ".#{$OBJEXT}"
-    orig_srcs = Dir[File.join(srcdir, "*.{#{SRC_EXT.join(%q{,})}}")]
+    orig_srcs = Dir[File.join(srcdir, "*.{#{SRC_EXT.join(%q{,})}}")].sort
     if not $objs
       srcs = $srcs || orig_srcs
-      objs = srcs.inject(Hash.new {[]}) {|h, f| h[File.basename(f, ".*") << ext] <<= f; h}
-      $objs = objs.keys
+      $objs = []
+      objs = srcs.inject(Hash.new {[]}) {|h, f|
+        h.key?(o = File.basename(f, ".*") << ext) or $objs << o
+        h[o] <<= f
+        h
+      }
       unless objs.delete_if {|b, f| f.size == 1}.empty?
         dups = objs.sort.map {|b, f|
           "#{b[/.*\./]}{#{f.collect {|n| n[/([^.]+)\z/]}.join(',')}}"
@@ -2254,11 +2264,8 @@ RULES
 
     dllib = target ? "$(TARGET).#{CONFIG['DLEXT']}" : ""
     staticlib = target ? "$(TARGET).#$LIBEXT" : ""
-    mfile = open("Makefile", "wb")
     conf = configuration(srcprefix)
-    conf = yield(conf) if block_given?
-    mfile.puts(conf)
-    mfile.print "
+    conf << "\
 libpath = #{($DEFLIBPATH|$LIBPATH).join(" ")}
 LIBPATH = #{libpath}
 DEFFILE = #{deffile}
@@ -2276,6 +2283,7 @@ ORIG_SRCS = #{orig_srcs.collect(&File.method(:basename)).join(' ')}
 SRCS = $(ORIG_SRCS) #{(srcs - orig_srcs).collect(&File.method(:basename)).join(' ')}
 OBJS = #{$objs.join(" ")}
 HDRS = #{hdrs.map{|h| '$(srcdir)/' + File.basename(h)}.join(' ')}
+LOCAL_HDRS = #{$headers.join(' ')}
 TARGET = #{target}
 TARGET_NAME = #{target && target[/\A\w+/]}
 TARGET_ENTRY = #{EXPORT_PREFIX || ''}Init_$(TARGET_NAME)
@@ -2283,21 +2291,28 @@ DLLIB = #{dllib}
 EXTSTATIC = #{$static || ""}
 STATIC_LIB = #{staticlib unless $static.nil?}
 #{!$extout && defined?($installed_list) ? "INSTALLED_LIST = #{$installed_list}\n" : ""}
-TIMESTAMP_DIR = #{$extout ? '$(extout)/.timestamp' : '.'}
+TIMESTAMP_DIR = #{$extout && $extmk ? '$(extout)/.timestamp' : '.'}
 " #"
     # TODO: fixme
-    install_dirs.each {|d| mfile.print("%-14s= %s\n" % d) if /^[[:upper:]]/ =~ d[0]}
-    n = ($extout ? '$(RUBYARCHDIR)/' : '') + '$(TARGET)'
-    mfile.print "
-TARGET_SO     = #{($extout ? '$(RUBYARCHDIR)/' : '')}$(DLLIB)
-CLEANLIBS     = #{n}.#{CONFIG['DLEXT']} #{config_string('cleanlibs') {|t| t.gsub(/\$\*/) {n}}}
+    install_dirs.each {|d| conf << ("%-14s= %s\n" % d) if /^[[:upper:]]/ =~ d[0]}
+    sodir = $extout ? '$(TARGET_SO_DIR)' : '$(RUBYARCHDIR)'
+    n = '$(TARGET_SO_DIR)$(TARGET)'
+    conf << "\
+TARGET_SO_DIR =#{$extout ? " $(RUBYARCHDIR)/" : ''}
+TARGET_SO     = $(TARGET_SO_DIR)$(DLLIB)
+CLEANLIBS     = #{'$(TARGET_SO) ' if target}#{config_string('cleanlibs') {|t| t.gsub(/\$\*/) {n}}}
 CLEANOBJS     = *.#{$OBJEXT} #{config_string('cleanobjs') {|t| t.gsub(/\$\*/, "$(TARGET)#{deffile ? '-$(arch)': ''}")} if target} *.bak
+" #"
 
+    conf = yield(conf) if block_given?
+    mfile = open("Makefile", "wb")
+    mfile.puts(conf)
+    mfile.print "
 all:    #{$extout ? "install" : target ? "$(DLLIB)" : "Makefile"}
-static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" : ""}"}
+static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{$extout ? " install-rb" : ""}"}
 .PHONY: all install static install-so install-rb
 .PHONY: clean clean-so clean-static clean-rb
-"
+" #"
     mfile.print CLEANINGS
     fsep = config_string('BUILD_FILE_SEPARATOR') {|s| s unless s == "/"}
     if fsep
@@ -2315,11 +2330,11 @@ static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" :
     end
     dirs = []
     mfile.print "install: install-so install-rb\n\n"
-    sodir = (dir = "$(RUBYARCHDIR)").dup
+    dir = sodir.dup
     mfile.print("install-so: ")
     if target
       f = "$(DLLIB)"
-      dest = "#{dir}/#{f}"
+      dest = "$(TARGET_SO)"
       stamp = timestamp_file(dir, target_prefix)
       if $extout
         mfile.puts dest
@@ -2338,10 +2353,12 @@ static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" :
     else
       mfile.puts "Makefile"
     end
-    mfile.print("install-rb: pre-install-rb install-rb-default\n")
-    mfile.print("install-rb-default: pre-install-rb-default\n")
+    mfile.print("install-rb: pre-install-rb do-install-rb install-rb-default\n")
+    mfile.print("install-rb-default: pre-install-rb-default do-install-rb-default\n")
     mfile.print("pre-install-rb: Makefile\n")
     mfile.print("pre-install-rb-default: Makefile\n")
+    mfile.print("do-install-rb:\n")
+    mfile.print("do-install-rb-default:\n")
     for sfx, i in [["-default", [["lib/**/*.rb", "$(RUBYLIBDIR)", "lib"]]], ["", $INSTALLFILES]]
       files = install_files(mfile, i, nil, srcprefix) or next
       for dir, *files in files
@@ -2351,7 +2368,7 @@ static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" :
         end
         for f in files
           dest = "#{dir}/#{File.basename(f)}"
-          mfile.print("install-rb#{sfx}: #{dest}\n")
+          mfile.print("do-install-rb#{sfx}: #{dest}\n")
           mfile.print("#{dest}: #{f} #{timestamp_file(dir, target_prefix)}\n")
           mfile.print("\t$(Q) $(#{$extout ? 'COPY' : 'INSTALL_DATA'}) #{f} $(@D)\n")
           if defined?($installed_list) and !$extout
@@ -2367,7 +2384,13 @@ static: #{$extmk && !$static ? "all" : "$(STATIC_LIB)#{!$extmk ? " install-rb" :
       if files.empty?
         mfile.print("\t@$(NULLCMD)\n")
       else
-        mfile.print("\t$(ECHO) installing#{sfx.sub(/^-/, " ")} #{target} libraries\n")
+        q = "$(MAKE) -q do-install-rb#{sfx}"
+        if $nmake
+          mfile.print "!if \"$(Q)\" == \"@\"\n\t@#{q} || \\\n!endif\n\t"
+        else
+          mfile.print "\t$(Q1:0=@#{q} || )"
+        end
+        mfile.print "$(ECHO1:0=echo) installing#{sfx.sub(/^-/, " ")} #{target} libraries\n"
       end
       if $extout
         dirs.uniq!
@@ -2397,7 +2420,6 @@ site-install-rb: install-rb
 
     return unless target
 
-    mfile.puts SRC_EXT.collect {|e| ".path.#{e} = $(VPATH)"} if $nmake == ?b
     mfile.print ".SUFFIXES: .#{(SRC_EXT + [$OBJEXT, $ASMEXT]).compact.join(' .')}\n"
     mfile.print "\n"
 
@@ -2423,11 +2445,10 @@ site-install-rb: install-rb
       end
     end
 
-    mfile.print "$(RUBYARCHDIR)/" if $extout
-    mfile.print "$(DLLIB): "
+    mfile.print "$(TARGET_SO): "
     mfile.print "$(DEFFILE) " if makedef
     mfile.print "$(OBJS) Makefile"
-    mfile.print " #{timestamp_file('$(RUBYARCHDIR)', target_prefix)}" if $extout
+    mfile.print " #{timestamp_file(sodir, target_prefix)}" if $extout
     mfile.print "\n"
     mfile.print "\t$(ECHO) linking shared-object #{target_prefix.sub(/\A\/(.*)/, '\1/')}$(DLLIB)\n"
     mfile.print "\t-$(Q)$(RM) $(@#{sep})\n"
@@ -2474,6 +2495,9 @@ site-install-rb: install-rb
     if $warnflags = CONFIG['warnflags'] and CONFIG['GCC'] == 'yes'
       # turn warnings into errors only for bundled extensions.
       config['warnflags'] = $warnflags.gsub(/(\A|\s)-Werror[-=]/, '\1-W')
+      if /icc\z/ =~ config['CC']
+        config['warnflags'].gsub!(/(\A|\s)-W(?:division-by-zero|deprecated-declarations)/, '\1')
+      end
       RbConfig.expand(rbconfig['warnflags'] = config['warnflags'].dup)
       config.each do |key, val|
         RbConfig.expand(rbconfig[key] = val.dup) if /warnflags/ =~ val
@@ -2506,6 +2530,7 @@ site-install-rb: install-rb
 
     $objs = nil
     $srcs = nil
+    $headers = []
     $libs = ""
     if $enable_shared or RbConfig.expand(config["LIBRUBY"].dup) != RbConfig.expand(config["LIBRUBY_A"].dup)
       $LIBRUBYARG = config['LIBRUBYARG']
@@ -2631,12 +2656,12 @@ MESSAGE
   ##
   # Command which will compile C files in the generated Makefile
 
-  COMPILE_C = config_string('COMPILE_C') || '$(CC) $(INCFLAGS) $(CPPFLAGS) $(CFLAGS) $(COUTFLAG)$@ -c $<'
+  COMPILE_C = config_string('COMPILE_C') || '$(CC) $(INCFLAGS) $(CPPFLAGS) $(CFLAGS) $(COUTFLAG)$@ -c $(CSRCFLAG)$<'
 
   ##
   # Command which will compile C++ files in the generated Makefile
 
-  COMPILE_CXX = config_string('COMPILE_CXX') || '$(CXX) $(INCFLAGS) $(CPPFLAGS) $(CXXFLAGS) $(COUTFLAG)$@ -c $<'
+  COMPILE_CXX = config_string('COMPILE_CXX') || '$(CXX) $(INCFLAGS) $(CPPFLAGS) $(CXXFLAGS) $(COUTFLAG)$@ -c $(CSRCFLAG)$<'
 
   ##
   # Command which will translate C files to assembler sources in the generated Makefile

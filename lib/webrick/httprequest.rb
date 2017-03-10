@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 # httprequest.rb -- HTTPRequest Class
 #
@@ -566,7 +567,9 @@ module WEBrick
       if @forwarded_server = self["x-forwarded-server"]
         @forwarded_server = @forwarded_server.split(",", 2).first
       end
-      @forwarded_proto = self["x-forwarded-proto"]
+      if @forwarded_proto = self["x-forwarded-proto"]
+        @forwarded_proto = @forwarded_proto.split(",", 2).first
+      end
       if host_port = self["x-forwarded-host"]
         host_port = host_port.split(",", 2).first
         @forwarded_host, tmp = host_port.split(":", 2)

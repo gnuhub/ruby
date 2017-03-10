@@ -1,3 +1,6 @@
+# Used by Makefile and configure for building Ruby.
+# See common.mk and Makefile.in for details.
+
 class File
   sep = ("\\" if RUBY_PLATFORM =~ /mswin|bccwin|mingw/)
   if sep != ALT_SEPARATOR
@@ -46,17 +49,21 @@ prehook = proc do |extmk|
   end
   join = proc {|*args| File.join(*args).sub!(/\A(?:\.\/)*/, '')}
   $topdir ||= builddir
-  $top_srcdir ||= join[$topdir, srcdir]
+  $top_srcdir ||= (File.identical?(top_srcdir, dir = join[$topdir, srcdir]) ?
+                     dir : top_srcdir)
   $extout = '$(topdir)/.ext'
   $extout_prefix = '$(extout)$(target_prefix)/'
   config = RbConfig::CONFIG
   mkconfig = RbConfig::MAKEFILE_CONFIG
   mkconfig["builddir"] = config["builddir"] = builddir
+  mkconfig["buildlibdir"] = config["buildlibdir"] = builddir
   mkconfig["top_srcdir"] = $top_srcdir if $top_srcdir
+  mkconfig["extout"] ||= $extout
   config["top_srcdir"] = File.expand_path($top_srcdir ||= top_srcdir)
   config["rubyhdrdir"] = join[$top_srcdir, "include"]
   config["rubyarchhdrdir"] = join[builddir, config["EXTOUT"], "include", config["arch"]]
-  mkconfig["libdirname"] = "builddir"
+  config["extout"] ||= join[$topdir, ".ext"]
+  mkconfig["libdirname"] = "buildlibdir"
   trace_var(:$ruby, posthook)
   untrace_var(:$extmk, prehook)
 end

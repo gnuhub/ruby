@@ -1,4 +1,5 @@
 # coding: US-ASCII
+# frozen_string_literal: false
 
 require 'rdoc/test_case'
 
@@ -152,7 +153,7 @@ class TestRDocGeneratorJsonIndex < RDoc::TestCase
     assert_file 'js/search_index.js'
     assert_file 'js/search_index.js.gz'
 
-    json = File.open('js/search_index.js.gz') {|gzip|
+    json = File.open('js/search_index.js.gz', 'rb') {|gzip|
       Zlib::GzipReader.new(gzip).read
     }
 
@@ -197,8 +198,6 @@ class TestRDocGeneratorJsonIndex < RDoc::TestCase
   end
 
   def test_generate_utf_8
-    skip "Encoding not implemented" unless Object.const_defined? :Encoding
-
     text = "5\xB0"
     text.force_encoding Encoding::ISO_8859_1
     @klass.add_comment comment(text), @top_level
@@ -321,4 +320,3 @@ class TestRDocGeneratorJsonIndex < RDoc::TestCase
   end
 
 end
-

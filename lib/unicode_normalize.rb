@@ -1,8 +1,11 @@
 # coding: utf-8
+# frozen_string_literal: false
 
 # Copyright Ayumu Nojima (野島 歩) and Martin J. Dürst (duerst@it.aoyama.ac.jp)
 
+#--
 # additions to class String for Unicode normalization
+#++
 class String
   # === Unicode Normalization
   #

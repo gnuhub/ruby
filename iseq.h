@@ -12,6 +12,9 @@
 #ifndef RUBY_ISEQ_H
 #define RUBY_ISEQ_H 1
 
+#define ISEQ_MAJOR_VERSION 2
+#define ISEQ_MINOR_VERSION 3
+
 #ifndef rb_iseq_t
 typedef struct rb_iseq_struct rb_iseq_t;
 #define rb_iseq_t rb_iseq_t
@@ -24,21 +27,33 @@ rb_call_info_kw_arg_bytes(int keyword_len)
 }
 
 enum iseq_mark_ary_index {
-    ISEQ_MARK_ARY_COVERAGE      = 0,
-    ISEQ_MARK_ARY_FLIP_CNT      = 1,
-    ISEQ_MARK_ARY_ORIGINAL_ISEQ = 2,
+    ISEQ_MARK_ARY_COVERAGE,
+    ISEQ_MARK_ARY_FLIP_CNT,
+    ISEQ_MARK_ARY_ORIGINAL_ISEQ,
+    ISEQ_MARK_ARY_INITIAL_SIZE
 };
+
+static inline VALUE
+iseq_mark_ary_create(int flip_cnt)
+{
+    VALUE ary = rb_ary_tmp_new(ISEQ_MARK_ARY_INITIAL_SIZE);
+    rb_ary_push(ary, Qnil);              /* ISEQ_MARK_ARY_COVERAGE */
+    rb_ary_push(ary, INT2FIX(flip_cnt)); /* ISEQ_MARK_ARY_FLIP_CNT */
+    rb_ary_push(ary, Qnil);              /* ISEQ_MARK_ARY_ORIGINAL_ISEQ */
+    return ary;
+}
 
 #define ISEQ_MARK_ARY(iseq)           (iseq)->body->mark_ary
 
 #define ISEQ_COVERAGE(iseq)           RARRAY_AREF(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_COVERAGE)
 #define ISEQ_COVERAGE_SET(iseq, cov)  RARRAY_ASET(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_COVERAGE, cov)
 
+#define ISEQ_FLIP_CNT(iseq) FIX2INT(RARRAY_AREF(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_FLIP_CNT))
+
 static inline int
 ISEQ_FLIP_CNT_INCREMENT(const rb_iseq_t *iseq)
 {
-    VALUE cntv = RARRAY_AREF(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_FLIP_CNT);
-    int cnt = FIX2INT(cntv);
+    int cnt = ISEQ_FLIP_CNT(iseq);
     RARRAY_ASET(ISEQ_MARK_ARY(iseq), ISEQ_MARK_ARY_FLIP_CNT, INT2FIX(cnt+1));
     return cnt;
 }
@@ -59,7 +74,20 @@ ISEQ_ORIGINAL_ISEQ_ALLOC(const rb_iseq_t *iseq, long size)
     return (VALUE *)RSTRING_PTR(str);
 }
 
-#define ISEQ_COMPILE_DATA(iseq)       (iseq)->compile_data_
+#define ISEQ_COMPILE_DATA(iseq)       (iseq)->aux.compile_data
+
+static inline rb_iseq_t *
+iseq_imemo_alloc(void)
+{
+    return (rb_iseq_t *)rb_imemo_new(imemo_iseq, 0, 0, 0, 0);
+}
+
+#define ISEQ_NOT_LOADED_YET   IMEMO_FL_USER1
+
+VALUE iseq_ibf_dump(const rb_iseq_t *iseq, VALUE opt);
+void ibf_load_iseq_complete(rb_iseq_t *iseq);
+const rb_iseq_t *iseq_ibf_load(VALUE str);
+VALUE iseq_ibf_load_extra_data(VALUE str);
 
 RUBY_SYMBOL_EXPORT_BEGIN
 
@@ -96,16 +124,17 @@ const rb_iseq_t *rb_method_iseq(VALUE body);
 const rb_iseq_t *rb_proc_get_iseq(VALUE proc, int *is_proc);
 
 struct rb_compile_option_struct {
-    int inline_const_cache;
-    int peephole_optimization;
-    int tailcall_optimization;
-    int specialized_instruction;
-    int operands_unification;
-    int instructions_unification;
-    int stack_caching;
-    int trace_instruction;
-    int frozen_string_literal;
-    int debug_frozen_string_literal;
+    unsigned int inline_const_cache: 1;
+    unsigned int peephole_optimization: 1;
+    unsigned int tailcall_optimization: 1;
+    unsigned int specialized_instruction: 1;
+    unsigned int operands_unification: 1;
+    unsigned int instructions_unification: 1;
+    unsigned int stack_caching: 1;
+    unsigned int trace_instruction: 1;
+    unsigned int frozen_string_literal: 1;
+    unsigned int debug_frozen_string_literal: 1;
+    unsigned int coverage_enabled: 1;
     int debug_level;
 };
 
@@ -184,6 +213,7 @@ struct iseq_compile_data {
     unsigned int ci_index;
     unsigned int ci_kw_index;
     const rb_compile_option_t *option;
+    struct rb_id_table *ivar_cache_table;
 #if SUPPORT_JOKE
     st_table *labels_table;
 #endif
@@ -213,6 +243,9 @@ enum defined_type {
 
 VALUE rb_iseq_defined_string(enum defined_type type);
 void rb_iseq_make_compile_option(struct rb_compile_option_struct *option, VALUE opt);
+
+/* vm.c */
+VALUE rb_iseq_local_variables(const rb_iseq_t *iseq);
 
 RUBY_SYMBOL_EXPORT_END
 

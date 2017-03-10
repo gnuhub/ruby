@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 #   shell/process-controller.rb -
 #       $Release Version: 0.7 $
@@ -17,11 +18,11 @@ class Shell
   class ProcessController
 
     @ProcessControllers = {}
-    @ProcessControllersMonitor = Mutex.new
-    @ProcessControllersCV = ConditionVariable.new
+    @ProcessControllersMonitor = Thread::Mutex.new
+    @ProcessControllersCV = Thread::ConditionVariable.new
 
-    @BlockOutputMonitor = Mutex.new
-    @BlockOutputCV = ConditionVariable.new
+    @BlockOutputMonitor = Thread::Mutex.new
+    @BlockOutputCV = Thread::ConditionVariable.new
 
     class << self
       extend Forwardable
@@ -96,8 +97,8 @@ class Shell
       @active_jobs = []
       @jobs_sync = Sync.new
 
-      @job_monitor = Mutex.new
-      @job_condition = ConditionVariable.new
+      @job_monitor = Thread::Mutex.new
+      @job_condition = Thread::ConditionVariable.new
     end
 
     attr_reader :shell
@@ -237,8 +238,8 @@ class Shell
 
 
       pid = nil
-      pid_mutex = Mutex.new
-      pid_cv = ConditionVariable.new
+      pid_mutex = Thread::Mutex.new
+      pid_cv = Thread::ConditionVariable.new
 
       Thread.start do
         ProcessController.block_output_synchronize do
@@ -259,7 +260,7 @@ class Shell
 
             ObjectSpace.each_object(IO) do |io|
               if ![STDIN, STDOUT, STDERR].include?(io)
-                io.close unless io.closed?
+                io.close
               end
             end
 

@@ -21,6 +21,7 @@
 #include "objspace.h"
 
 static VALUE sym_output, sym_stdout, sym_string, sym_file;
+static VALUE sym_full;
 
 struct dump_config {
     VALUE type;
@@ -31,8 +32,10 @@ struct dump_config {
     VALUE cur_obj;
     VALUE cur_obj_klass;
     size_t cur_obj_references;
+    int full_heap;
 };
 
+PRINTF_ARGS(static void dump_append(struct dump_config *, const char *, ...), 2, 3);
 static void
 dump_append(struct dump_config *dc, const char *format, ...)
 {
@@ -181,11 +184,30 @@ dump_append_string_content(struct dump_config *dc, VALUE obj)
 {
     dump_append(dc, ", \"bytesize\":%ld", RSTRING_LEN(obj));
     if (!STR_EMBED_P(obj) && !STR_SHARED_P(obj) && (long)rb_str_capacity(obj) != RSTRING_LEN(obj))
-	dump_append(dc, ", \"capacity\":%ld", rb_str_capacity(obj));
+	dump_append(dc, ", \"capacity\":%"PRIuSIZE, rb_str_capacity(obj));
 
     if (is_ascii_string(obj)) {
 	dump_append(dc, ", \"value\":");
 	dump_append_string_value(dc, obj);
+    }
+}
+
+static const char *
+imemo_name(int imemo)
+{
+    switch(imemo) {
+#define TYPE_STR(t) case(imemo_##t): return #t; break;
+	TYPE_STR(env)
+	TYPE_STR(cref)
+	TYPE_STR(svar)
+	TYPE_STR(throw_data)
+	TYPE_STR(ifunc)
+	TYPE_STR(memo)
+	TYPE_STR(ment)
+	TYPE_STR(iseq)
+	default:
+	    return "unknown";
+#undef TYPE_STR
     }
 }
 
@@ -218,8 +240,16 @@ dump_object(VALUE obj, struct dump_config *dc)
 	dump_append(dc, ", \"frozen\":true");
 
     switch (BUILTIN_TYPE(obj)) {
+      case T_NONE:
+	  dump_append(dc, "}\n");
+	  return;
+
       case T_NODE:
 	dump_append(dc, ", \"node_type\":\"%s\"", ruby_node_name(nd_type(obj)));
+	break;
+
+      case T_IMEMO:
+	dump_append(dc, ", \"imemo_type\":\"%s\"", imemo_name(imemo_type(obj)));
 	break;
 
       case T_SYMBOL:
@@ -243,7 +273,7 @@ dump_object(VALUE obj, struct dump_config *dc)
 	break;
 
       case T_HASH:
-	dump_append(dc, ", \"size\":%ld", RHASH_SIZE(obj));
+	dump_append(dc, ", \"size\":%"PRIuSIZE, (size_t)RHASH_SIZE(obj));
 	if (FL_TEST(obj, HASH_PROC_DEFAULT))
 	    dump_append(dc, ", \"default\":\"%p\"", (void *)RHASH_IFNONE(obj));
 	break;
@@ -272,7 +302,7 @@ dump_object(VALUE obj, struct dump_config *dc)
 	break;
 
       case T_OBJECT:
-	dump_append(dc, ", \"ivars\":%ld", ROBJECT_NUMIV(obj));
+	dump_append(dc, ", \"ivars\":%u", ROBJECT_NUMIV(obj));
 	break;
 
       case T_FILE:
@@ -317,10 +347,11 @@ dump_object(VALUE obj, struct dump_config *dc)
 static int
 heap_i(void *vstart, void *vend, size_t stride, void *data)
 {
+    struct dump_config *dc = (struct dump_config *)data;
     VALUE v = (VALUE)vstart;
     for (; v != (VALUE)vend; v += stride) {
-	if (RBASIC(v)->flags)
-	    dump_object(v, data);
+	if (dc->full_heap || RBASIC(v)->flags)
+	    dump_object(v, dc);
     }
     return 0;
 }
@@ -346,8 +377,14 @@ dump_output(struct dump_config *dc, VALUE opts, VALUE output, const char *filena
 {
     VALUE tmp;
 
-    if (RTEST(opts))
+    dc->full_heap = 0;
+
+    if (RTEST(opts)) {
 	output = rb_hash_aref(opts, sym_output);
+
+	if (Qtrue == rb_hash_lookup2(opts, sym_full, Qfalse))
+	    dc->full_heap = 1;
+    }
 
     if (output == sym_stdout) {
 	dc->stream = stdout;
@@ -381,7 +418,7 @@ static VALUE
 dump_result(struct dump_config *dc, VALUE output)
 {
     if (output == sym_string) {
-	return dc->string;
+	return rb_str_resurrect(dc->string);
     }
     else if (output == sym_file) {
 	rb_io_flush(dc->string);
@@ -473,6 +510,7 @@ Init_objspace_dump(VALUE rb_mObjSpace)
     sym_stdout = ID2SYM(rb_intern("stdout"));
     sym_string = ID2SYM(rb_intern("string"));
     sym_file   = ID2SYM(rb_intern("file"));
+    sym_full   = ID2SYM(rb_intern("full"));
 
     /* force create static IDs */
     rb_obj_gc_flags(rb_mObjSpace, 0, 0);

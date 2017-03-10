@@ -329,9 +329,7 @@ module Net
       end
       @receiver_thread.join
       synchronize do
-        unless @sock.closed?
-          @sock.close
-        end
+        @sock.close
       end
       raise e if e
     end
@@ -419,7 +417,7 @@ module Net
       send_command("AUTHENTICATE", auth_type) do |resp|
         if resp.instance_of?(ContinuationRequest)
           data = authenticator.process(resp.data.text.unpack("m")[0])
-          s = [data].pack("m").gsub(/\n/, "")
+          s = [data].pack("m0")
           send_string_data(s)
           put_string(CRLF)
         end
@@ -779,7 +777,7 @@ module Net
     #
     # The +set+ parameter is a number or a range between two numbers,
     # or an array of those.  The number is a message sequence number,
-    # where -1 repesents a '*' for use in range notation like 100..-1
+    # where -1 represents a '*' for use in range notation like 100..-1
     # being interpreted as '100:*'.  Beware that the +exclude_end?+
     # property of a Range object is ignored, and the contents of a
     # range are independent of the order of the range endpoints as per
@@ -1007,8 +1005,8 @@ module Net
         if $1
           "&-"
         else
-          base64 = [$&.encode(Encoding::UTF_16BE)].pack("m")
-          "&" + base64.delete("=\n").tr("/", ",") + "-"
+          base64 = [$&.encode(Encoding::UTF_16BE)].pack("m0")
+          "&" + base64.delete("=").tr("/", ",") + "-"
         end
       }.force_encoding("ASCII-8BIT")
     end

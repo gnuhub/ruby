@@ -1,9 +1,5 @@
 # -*- coding: us-ascii -*-
 # frozen_string_literal: true
-begin
-  require 'openssl'
-rescue LoadError
-end
 
 # == Secure random number generator interface.
 #
@@ -48,15 +44,53 @@ end
 #
 
 module SecureRandom
-  if defined? OpenSSL::Random
-    def self.gen_random(n)
+  @rng_chooser = Mutex.new # :nodoc:
+
+  class << self
+    def bytes(n)
+      return gen_random(n)
+    end
+
+    def gen_random(n)
+      ret = Random.urandom(n)
+      if ret.nil?
+        begin
+          require 'openssl'
+        rescue NoMethodError
+          raise NotImplementedError, "No random device"
+        else
+          @rng_chooser.synchronize do
+            class << self
+              remove_method :gen_random
+              alias gen_random gen_random_openssl
+            end
+          end
+          return gen_random(n)
+        end
+      elsif ret.length != n
+        raise NotImplementedError, \
+              "Unexpected partial read from random device: " \
+              "only #{ret.length} for #{n} bytes"
+      else
+        @rng_chooser.synchronize do
+          class << self
+            remove_method :gen_random
+            alias gen_random gen_random_urandom
+          end
+        end
+        return gen_random(n)
+      end
+    end
+
+    private
+
+    def gen_random_openssl(n)
       @pid = 0 unless defined?(@pid)
       pid = $$
       unless @pid == pid
         now = Process.clock_gettime(Process::CLOCK_REALTIME, :nanosecond)
-        ary = [now, @pid, pid]
-        OpenSSL::Random.random_add(ary.join("").to_s, 0.0)
-        seed = Random.raw_seed(16)
+        OpenSSL::Random.random_add([now, @pid, pid].join(""), 0.0)
+        seed = Random.urandom(16)
         if (seed)
           OpenSSL::Random.random_add(seed, 16)
         end
@@ -64,9 +98,9 @@ module SecureRandom
       end
       return OpenSSL::Random.random_bytes(n)
     end
-  else
-    def self.gen_random(n)
-      ret = Random.raw_seed(n)
+
+    def gen_random_urandom(n)
+      ret = Random.urandom(n)
       unless ret
         raise NotImplementedError, "No random device"
       end
@@ -136,7 +170,7 @@ module Random::Formatter
   #
   # See RFC 3548 for the definition of base64.
   def base64(n=nil)
-    [random_bytes(n)].pack("m*").delete("\n")
+    [random_bytes(n)].pack("m0")
   end
 
   # SecureRandom.urlsafe_base64 generates a random URL-safe base64 string.
@@ -166,8 +200,7 @@ module Random::Formatter
   #
   # See RFC 3548 for the definition of URL-safe base64.
   def urlsafe_base64(n=nil, padding=false)
-    s = [random_bytes(n)].pack("m*")
-    s.delete!("\n")
+    s = [random_bytes(n)].pack("m0")
     s.tr!("+/", "-_")
     s.delete!("=") unless padding
     s

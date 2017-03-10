@@ -14,6 +14,12 @@
 #ifdef HAVE_SYS_IOCTL_H
 #include <sys/ioctl.h>
 #endif
+#ifndef RARRAY_CONST_PTR
+# define RARRAY_CONST_PTR(ary) RARRAY_PTR(ary)
+#endif
+#ifndef HAVE_RB_FUNCALLV
+# define rb_funcallv rb_funcall2
+#endif
 
 #if defined HAVE_TERMIOS_H
 # include <termios.h>
@@ -74,6 +80,9 @@ getattr(int fd, conmode *t)
 #endif
 
 static ID id_getc, id_console, id_close, id_min, id_time;
+#if ENABLE_IO_GETPASS
+static ID id_gets;
+#endif
 
 #ifndef HAVE_RB_F_SEND
 static ID id___send__;
@@ -92,6 +101,10 @@ rb_f_send(int argc, VALUE *argv, VALUE recv)
     }
     return rb_funcallv(recv, vid, argc, argv);
 }
+#endif
+
+#ifndef HAVE_RB_SYM2STR
+# define rb_sym2str(sym) rb_id2str(SYM2ID(sym))
 #endif
 
 typedef struct {
@@ -277,8 +290,7 @@ ttymode(VALUE io, VALUE (*func)(VALUE), void (*setter)(conmode *, void *), void 
     }
     if (status) {
 	if (status == -1) {
-	    errno = error;
-	    rb_sys_fail(0);
+	    rb_syserr_fail(error, 0);
 	}
 	rb_jump_tag(status);
     }
@@ -376,7 +388,7 @@ console_set_cooked(VALUE io)
 static VALUE
 getc_call(VALUE io)
 {
-    return rb_funcall2(io, id_getc, 0, 0);
+    return rb_funcallv(io, id_getc, 0, 0);
 }
 
 /*
@@ -523,12 +535,18 @@ console_set_winsize(VALUE io, VALUE size)
     VALUE row, col, xpixel, ypixel;
     const VALUE *sz;
     int fd;
+    long sizelen;
 
     GetOpenFile(io, fptr);
     size = rb_Array(size);
-    rb_check_arity(RARRAY_LENINT(size), 2, 4);
+    if ((sizelen = RARRAY_LEN(size)) != 2 && sizelen != 4) {
+	rb_raise(rb_eArgError,
+		 "wrong number of arguments (given %ld, expected 2 or 4)",
+		 sizelen);
+    }
     sz = RARRAY_CONST_PTR(size);
-    row = sz[0], col = sz[1], xpixel = sz[2], ypixel = sz[3];
+    row = sz[0], col = sz[1], xpixel = ypixel = Qnil;
+    if (sizelen == 4) xpixel = sz[2], ypixel = sz[3];
     fd = GetWriteFD(fptr);
 #if defined TIOCSWINSZ
     ws.ws_row = ws.ws_col = ws.ws_xpixel = ws.ws_ypixel = 0;
@@ -716,15 +734,17 @@ console_key_pressed_p(VALUE io, VALUE k)
     }
     else {
 	const struct vktable *t;
+	const char *kn;
 	if (SYMBOL_P(k)) {
 	    k = rb_sym2str(k);
+	    kn = RSTRING_PTR(k);
 	}
 	else {
-	    StringValueCStr(k);
+	    kn = StringValuePtr(k);
 	}
-	t = console_win32_vk(RSTRING_PTR(k), RSTRING_LEN(k));
+	t = console_win32_vk(kn, RSTRING_LEN(k));
 	if (!t || (vk = (short)t->vk) == -1) {
-	    rb_raise(rb_eArgError, "unknown virtual key code: %"PRIsVALUE, k);
+	    rb_raise(rb_eArgError, "unknown virtual key code: % "PRIsVALUE, k);
 	}
     }
     return GetKeyState(vk) & 0x80 ? Qtrue : Qfalse;
@@ -842,8 +862,82 @@ console_dev(int argc, VALUE *argv, VALUE klass)
 static VALUE
 io_getch(int argc, VALUE *argv, VALUE io)
 {
-    return rb_funcall2(io, id_getc, argc, argv);
+    return rb_funcallv(io, id_getc, argc, argv);
 }
+
+#if ENABLE_IO_GETPASS
+static VALUE
+puts_call(VALUE io)
+{
+    return rb_io_write(io, rb_default_rs);
+}
+
+static VALUE
+getpass_call(VALUE io)
+{
+    return ttymode(io, rb_io_gets, set_noecho, NULL);
+}
+
+static void
+prompt(int argc, VALUE *argv, VALUE io)
+{
+    if (argc > 0 && !NIL_P(argv[0])) {
+	VALUE str = argv[0];
+	StringValueCStr(str);
+	rb_check_safe_obj(str);
+	rb_io_write(io, str);
+    }
+}
+
+static VALUE
+str_chomp(VALUE str)
+{
+    if (!NIL_P(str)) {
+	str = rb_funcallv(str, rb_intern("chomp!"), 0, 0);
+    }
+    return str;
+}
+
+/*
+ * call-seq:
+ *   io.getpass(prompt=nil)       -> string
+ *
+ * Reads and returns a line without echo back.
+ * Prints +prompt+ unless it is +nil+.
+ *
+ * You must require 'io/console' to use this method.
+ */
+static VALUE
+console_getpass(int argc, VALUE *argv, VALUE io)
+{
+    VALUE str, wio;
+
+    rb_check_arity(argc, 0, 1);
+    wio = rb_io_get_write_io(io);
+    if (wio == io && io == rb_stdin) wio = rb_stderr;
+    prompt(argc, argv, wio);
+    str = rb_ensure(getpass_call, io, puts_call, wio);
+    return str_chomp(str);
+}
+
+/*
+ * call-seq:
+ *   io.getpass(prompt=nil)       -> string
+ *
+ * See IO#getpass.
+ */
+static VALUE
+io_getpass(int argc, VALUE *argv, VALUE io)
+{
+    VALUE str;
+
+    rb_check_arity(argc, 0, 1);
+    prompt(argc, argv, io);
+    str = str_chomp(rb_funcallv(io, id_gets, 0, 0));
+    puts_call(io);
+    return str;
+}
+#endif
 
 /*
  * IO console methods
@@ -853,6 +947,9 @@ Init_console(void)
 {
 #undef rb_intern
     id_getc = rb_intern("getc");
+#if ENABLE_IO_GETPASS
+    id_gets = rb_intern("gets");
+#endif
     id_console = rb_intern("console");
     id_close = rb_intern("close");
     id_min = rb_intern("min");
@@ -884,9 +981,15 @@ InitVM_console(void)
     rb_define_method(rb_cIO, "cursor", console_cursor_pos, 0);
     rb_define_method(rb_cIO, "cursor=", console_cursor_set, 1);
     rb_define_method(rb_cIO, "pressed?", console_key_pressed_p, 1);
+#if ENABLE_IO_GETPASS
+    rb_define_method(rb_cIO, "getpass", console_getpass, -1);
+#endif
     rb_define_singleton_method(rb_cIO, "console", console_dev, -1);
     {
 	VALUE mReadable = rb_define_module_under(rb_cIO, "generic_readable");
 	rb_define_method(mReadable, "getch", io_getch, -1);
+#if ENABLE_IO_GETPASS
+	rb_define_method(mReadable, "getpass", io_getpass, -1);
+#endif
     }
 }

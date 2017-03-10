@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 #   thwait.rb - thread synchronization class
 #       $Release Version: 0.9 $
@@ -50,7 +51,7 @@ class ThreadsWait
   #
   def initialize(*threads)
     @threads = []
-    @wait_queue = Queue.new
+    @wait_queue = Thread::Queue.new
     join_nowait(*threads) unless threads.empty?
   end
 

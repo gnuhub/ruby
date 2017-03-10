@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 #
 #   shell/system-command.rb -
 #       $Release Version: 0.7 $
@@ -21,7 +22,7 @@ class Shell
       @command = command
       @opts = opts
 
-      @input_queue = Queue.new
+      @input_queue = Thread::Queue.new
       @pid = nil
 
       sh.process_controller.add_schedule(self)

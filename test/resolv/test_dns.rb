@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 require 'resolv'
 require 'socket'
@@ -196,6 +197,27 @@ class TestResolvDNS < Test::Unit::TestCase
     labels = addr.to_name.to_a
     expected = (['0'] * 32 + ['ip6', 'arpa']).map {|label| Resolv::DNS::Label::Str.new(label) }
     assert_equal(expected, labels)
+  end
+
+  def test_ipv6_create
+    ref = '[Bug #11910] [ruby-core:72559]'
+    assert_instance_of Resolv::IPv6, Resolv::IPv6.create('::1')
+    assert_instance_of Resolv::IPv6, Resolv::IPv6.create('::1:127.0.0.1')
+  end
+
+  def test_ipv6_should_be_16
+    ref = '[rubygems:1626]'
+
+    broken_message =
+      "\0\0\0\0\0\0\0\0\0\0\0\1" \
+      "\x03ns2\bdnsimple\x03com\x00" \
+      "\x00\x1C\x00\x01\x00\x02OD" \
+      "\x00\x10$\x00\xCB\x00 I\x00\x01\x00\x00\x00\x00"
+
+    e = assert_raise_with_message(Resolv::DNS::DecodeError, /IPv6 address must be 16 bytes/, ref) do
+      Resolv::DNS::Message.decode broken_message
+    end
+    assert_kind_of(ArgumentError, e.cause)
   end
 
   def test_too_big_label_address

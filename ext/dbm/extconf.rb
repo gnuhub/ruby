@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 # configure option:
 #   --with-dbm-type=COMMA-SEPARATED-NDBM-TYPES
 #

@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require "envutil"
 require "shellwords"
 
@@ -78,8 +79,6 @@ class TestExtLibs < Test::Unit::TestCase
   check_existence "strscan"
   check_existence "syslog"
   check_existence "thread"
-  #check_existence "tk" # depend on Tcl/Tk
-  #check_existence "tk/tkutil" # depend on Tcl/Tk
   check_existence "Win32API"
   check_existence "win32ole"
   check_existence "zlib", "this may be false positive, but should assert because rubygems requires this"

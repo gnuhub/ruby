@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 require 'securerandom'
 require 'tempfile'
@@ -154,6 +155,20 @@ end
       v = @it.random_number(idx)
       assert_in_range(0...idx, v)
     end
+  end
+
+  def test_s_random_number_not_default
+    msg = "SecureRandom#random_number should not be affected by srand"
+    seed = srand(0)
+    x = @it.random_number(1000)
+    10.times do|i|
+      srand(0)
+      return unless @it.random_number(1000) == x
+    end
+    srand(0)
+    assert_not_equal(x, @it.random_number(1000), msg)
+  ensure
+    srand(seed) if seed
   end
 
   def test_uuid

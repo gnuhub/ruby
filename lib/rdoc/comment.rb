@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 ##
 # A comment holds the text comment for a RDoc::CodeObject and provides a
 # unified way of cleaning it up and parsing it into an RDoc::Markup::Document.
@@ -199,7 +200,7 @@ class RDoc::Comment
   def remove_private
     # Workaround for gsub encoding for Ruby 1.9.2 and earlier
     empty = ''
-    empty.force_encoding @text.encoding if Object.const_defined? :Encoding
+    empty.force_encoding @text.encoding
 
     @text = @text.gsub(%r%^\s*([#*]?)--.*?^\s*(\1)\+\+\n?%m, empty)
     @text = @text.sub(%r%^\s*[#*]?--.*%m, '')
@@ -226,4 +227,3 @@ class RDoc::Comment
   end
 
 end
-

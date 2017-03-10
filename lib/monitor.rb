@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 # = monitor.rb
 #
 # Copyright (C) 2001  Shugo Maeda <shugo@ruby-lang.org>
@@ -152,7 +153,7 @@ module MonitorMixin
 
     def initialize(monitor)
       @monitor = monitor
-      @cond = ::ConditionVariable.new
+      @cond = Thread::ConditionVariable.new
     end
   end
 
@@ -240,7 +241,7 @@ module MonitorMixin
   def mon_initialize
     @mon_owner = nil
     @mon_count = 0
-    @mon_mutex = Mutex.new
+    @mon_mutex = Thread::Mutex.new
   end
 
   def mon_check_owner

@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 require 'tmpdir'
 
@@ -20,6 +21,7 @@ class TestDir_M17N < Test::Unit::TestCase
         assert_include(ents, filename)
       EOS
 
+      return if /cygwin/ =~ RUBY_PLATFORM
       assert_separately(%w[-EASCII-8BIT], <<-EOS, :chdir=>dir)
         filename = #{code}.chr('UTF-8').force_encoding("ASCII-8BIT")
         opts = {:encoding => Encoding.default_external} if /mswin|mingw/ =~ RUBY_PLATFORM
@@ -56,6 +58,7 @@ class TestDir_M17N < Test::Unit::TestCase
   end
 
   def test_filename_extutf8_invalid
+    return if /cygwin/ =~ RUBY_PLATFORM
     with_tmpdir {|d|
       assert_separately(%w[-EASCII-8BIT], <<-'EOS', :chdir=>d)
         filename = "\xff".force_encoding("ASCII-8BIT") # invalid byte sequence as UTF-8
@@ -171,6 +174,7 @@ class TestDir_M17N < Test::Unit::TestCase
   ## others
 
   def test_filename_bytes_euc_jp
+    return if /cygwin/ =~ RUBY_PLATFORM
     with_tmpdir {|d|
       assert_separately(%w[-EEUC-JP], <<-'EOS', :chdir=>d)
         filename = "\xA4\xA2".force_encoding("euc-jp")
@@ -187,6 +191,7 @@ class TestDir_M17N < Test::Unit::TestCase
   end
 
   def test_filename_euc_jp
+    return if /cygwin/ =~ RUBY_PLATFORM
     with_tmpdir {|d|
       assert_separately(%w[-EEUC-JP], <<-'EOS', :chdir=>d)
         filename = "\xA4\xA2".force_encoding("euc-jp")
@@ -208,7 +213,7 @@ class TestDir_M17N < Test::Unit::TestCase
           when /darwin/
             filename = filename.encode("utf-8", "euc-jp").b
           when /mswin|mingw/
-            if ents.include?(win_expected_filename.dup.force_encoding("ASCII-8BIT"))
+            if ents.include?(win_expected_filename.b)
               ents = Dir.entries(".", {:encoding => Encoding.find("filesystem")})
               filename = win_expected_filename
             end
@@ -232,6 +237,7 @@ class TestDir_M17N < Test::Unit::TestCase
   end
 
   def test_filename_ext_euc_jp_and_int_utf_8
+    return if /cygwin/ =~ RUBY_PLATFORM
     with_tmpdir {|d|
       assert_separately(%w[-EEUC-JP], <<-'EOS', :chdir=>d)
         filename = "\xA4\xA2".force_encoding("euc-jp")
@@ -364,10 +370,26 @@ class TestDir_M17N < Test::Unit::TestCase
 
   def test_glob_encoding
     with_tmpdir do
-      %W"file_one.ext file_two.ext".each {|f| open(f, "w") {}}
+      list = %W"file_one.ext file_two.ext \u{6587 4ef6}1.txt \u{6587 4ef6}2.txt"
+      list.each {|f| open(f, "w") {}}
       a = "file_one*".force_encoding Encoding::IBM437
       b = "file_two*".force_encoding Encoding::EUC_JP
       assert_equal([a, b].map(&:encoding), Dir[a, b].map(&:encoding))
+      dir = "\u{76EE 5F551}"
+      Dir.mkdir(dir)
+      list << dir
+      bug12081 = '[ruby-core:73868] [Bug #12081]'
+      a = "*".force_encoding("us-ascii")
+      result = Dir[a].map {|n|
+        if n.encoding == Encoding::ASCII_8BIT ||
+            n.encoding == Encoding::ISO_8859_1 ||
+            !n.valid_encoding?
+          n.force_encoding(Encoding::UTF_8)
+        else
+          n.encode(Encoding::UTF_8)
+        end
+      }
+      assert_equal(list, result.sort!, bug12081)
     end
   end
 

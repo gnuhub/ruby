@@ -178,8 +178,22 @@ check_dump_arg(VALUE ret, struct dump_arg *arg, const char *name)
     }
     return ret;
 }
+
+static VALUE
+check_userdump_arg(VALUE obj, ID sym, int argc, const VALUE *argv,
+		   struct dump_arg *arg, const char *name)
+{
+    VALUE ret = rb_funcallv(obj, sym, argc, argv);
+    VALUE klass = CLASS_OF(obj);
+    if (CLASS_OF(ret) == klass) {
+        rb_raise(rb_eRuntimeError, "%"PRIsVALUE"#%s returned same class instance",
+		 klass, name);
+    }
+    return check_dump_arg(ret, arg, name);
+}
+
 #define dump_funcall(arg, obj, sym, argc, argv) \
-    check_dump_arg(rb_funcallv(obj, sym, argc, argv), arg, name_##sym)
+    check_userdump_arg(obj, sym, argc, argv, arg, name_##sym)
 #define dump_check_funcall(arg, obj, sym, argc, argv) \
     check_dump_arg(rb_check_funcall(obj, sym, argc, argv), arg, name_##sym)
 
@@ -207,7 +221,7 @@ free_dump_arg(void *ptr)
 static size_t
 memsize_dump_arg(const void *ptr)
 {
-    return ptr ? sizeof(struct dump_arg) : 0;
+    return sizeof(struct dump_arg);
 }
 
 static const rb_data_type_t dump_arg_data = {
@@ -591,16 +605,18 @@ encoding_name(VALUE obj, struct dump_arg *arg)
 static void
 w_encoding(VALUE encname, struct dump_call_arg *arg)
 {
+    int limit = arg->limit;
+    if (limit >= 0) ++limit;
     switch (encname) {
       case Qfalse:
       case Qtrue:
 	w_symbol(ID2SYM(rb_intern("E")), arg->arg);
-	w_object(encname, arg->arg, arg->limit + 1);
+	w_object(encname, arg->arg, limit);
       case Qnil:
 	return;
     }
     w_symbol(ID2SYM(rb_id_encoding()), arg->arg);
-    w_object(encname, arg->arg, arg->limit + 1);
+    w_object(encname, arg->arg, limit);
 }
 
 static st_index_t
@@ -637,16 +653,9 @@ w_ivar(st_index_t num, VALUE ivobj, VALUE encname, struct dump_call_arg *arg)
 static void
 w_objivar(VALUE obj, struct dump_call_arg *arg)
 {
-    VALUE *ptr;
-    long i, len, num;
+    st_data_t num = 0;
 
-    len = ROBJECT_NUMIV(obj);
-    ptr = ROBJECT_IVPTR(obj);
-    num = 0;
-    for (i = 0; i < len; i++)
-        if (ptr[i] != Qundef)
-            num += 1;
-
+    rb_ivar_foreach(obj, obj_count_ivars, (st_data_t)&num);
     w_long(num, arg->arg);
     if (num != 0) {
         rb_ivar_foreach(obj, w_obj_each, (st_data_t)arg);
@@ -666,7 +675,7 @@ w_object(VALUE obj, struct dump_arg *arg, int limit)
 	rb_raise(rb_eArgError, "exceed depth limit");
     }
 
-    limit--;
+    if (limit > 0) limit--;
     c_arg.limit = limit;
     c_arg.arg = arg;
 
@@ -1017,7 +1026,7 @@ rb_marshal_dump_limited(VALUE obj, VALUE port, int limit)
     struct dump_arg *arg;
     VALUE wrapper; /* used to avoid memory leak in case of exception */
 
-    wrapper = TypedData_Make_Struct(rb_cData, struct dump_arg, &dump_arg_data, arg);
+    wrapper = TypedData_Make_Struct(0, struct dump_arg, &dump_arg_data, arg);
     arg->dest = 0;
     arg->symbols = st_init_numtable();
     arg->data    = rb_init_identtable();
@@ -1098,7 +1107,7 @@ free_load_arg(void *ptr)
 static size_t
 memsize_load_arg(const void *ptr)
 {
-    return ptr ? sizeof(struct load_arg) : 0;
+    return sizeof(struct load_arg);
 }
 
 static const rb_data_type_t load_arg_data = {
@@ -1181,19 +1190,11 @@ long_toobig(int size)
 	     STRINGIZE(SIZEOF_LONG)", given %d)", size);
 }
 
-#undef SIGN_EXTEND_CHAR
-#if __STDC__
-# define SIGN_EXTEND_CHAR(c) ((signed char)(c))
-#else  /* not __STDC__ */
-/* As in Harbison and Steele.  */
-# define SIGN_EXTEND_CHAR(c) ((((unsigned char)(c)) ^ 128) - 128)
-#endif
-
 static long
 r_long(struct load_arg *arg)
 {
     register long x;
-    int c = SIGN_EXTEND_CHAR(r_byte(arg));
+    int c = (signed char)r_byte(arg);
     long i;
 
     if (c == 0) return 0;
@@ -1576,7 +1577,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	    rb_raise(rb_eArgError, "dump format error (unlinked)");
 	}
 	v = (VALUE)link;
-	r_post_proc(v, arg);
+	v = r_post_proc(v, arg);
 	break;
 
       case TYPE_IVAR:
@@ -1592,6 +1593,7 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	{
 	    VALUE path = r_unique(arg);
 	    VALUE m = rb_path_to_class(path);
+	    if (NIL_P(extmod)) extmod = rb_ary_tmp_new(0);
 
 	    if (RB_TYPE_P(m, T_CLASS)) { /* prepended */
 		VALUE c;
@@ -1611,7 +1613,6 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	    }
 	    else {
 		must_be_module(m, path);
-		if (NIL_P(extmod)) extmod = rb_ary_tmp_new(0);
 		rb_ary_push(extmod, m);
 
 		v = r_object0(arg, 0, extmod);
@@ -1972,6 +1973,11 @@ r_object0(struct load_arg *arg, int *ivp, VALUE extmod)
 	rb_raise(rb_eArgError, "dump format error(0x%x)", type);
 	break;
     }
+
+    if (v == Qundef) {
+	rb_raise(rb_eArgError, "dump format error (bad link)");
+    }
+
     return v;
 }
 
@@ -2047,7 +2053,7 @@ rb_marshal_load_with_proc(VALUE port, VALUE proc)
     else {
 	io_needed();
     }
-    wrapper = TypedData_Make_Struct(rb_cData, struct load_arg, &load_arg_data, arg);
+    wrapper = TypedData_Make_Struct(0, struct load_arg, &load_arg_data, arg);
     arg->infection = infection;
     arg->src = port;
     arg->offset = 0;

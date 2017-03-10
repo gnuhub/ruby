@@ -1,6 +1,7 @@
 #option nodynamic
 
 #bigdecimal
+#cgi/escape
 #continuation
 #coverage
 #date
@@ -39,9 +40,6 @@
 #stringio
 #strscan
 #syslog
-#thread
-#tk
-#tk/tkutil
 #win32
 #win32ole
 #zlib

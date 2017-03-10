@@ -1,9 +1,12 @@
+# frozen_string_literal: false
 require "monitor"
 require "thread"
 
 require "test/unit"
 
 class TestMonitor < Test::Unit::TestCase
+  Queue = Thread::Queue
+
   def setup
     @monitor = Monitor.new
   end

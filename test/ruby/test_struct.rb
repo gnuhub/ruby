@@ -1,4 +1,5 @@
 # -*- coding: us-ascii -*-
+# frozen_string_literal: false
 require 'test/unit'
 require 'timeout'
 
@@ -94,6 +95,12 @@ module TestStruct
   def test_initialize
     klass = @Struct.new(:a)
     assert_raise(ArgumentError) { klass.new(1, 2) }
+    klass = @Struct.new(:total) do
+      def initialize(a, b)
+        super(a+b)
+      end
+    end
+    assert_equal 3, klass.new(1,2).total
   end
 
   def test_each
@@ -140,7 +147,7 @@ module TestStruct
     assert_equal("#<struct :@a=3>", o.inspect)
 
     methods = klass.instance_methods(false)
-    assert_equal([:@a, :"@a="].inspect, methods.inspect, '[Bug #8756]')
+    assert_equal([:@a, :"@a="].sort.inspect, methods.sort.inspect, '[Bug #8756]')
     assert_include(methods, :@a)
     assert_include(methods, :"@a=")
   end
@@ -241,7 +248,7 @@ module TestStruct
   def test_hash
     klass = @Struct.new(:a)
     o = klass.new(1)
-    assert_kind_of(Fixnum, o.hash)
+    assert_kind_of(Integer, o.hash)
   end
 
   def test_eql
@@ -358,6 +365,13 @@ module TestStruct
     o = klass.new(klass.new({b: [1, 2, 3]}))
     assert_equal(1, o.dig(:a, :a, :b, 0))
     assert_nil(o.dig(:b, 0))
+  end
+
+  def test_new_dupilicate
+    bug12291 = '[ruby-core:74971] [Bug #12291]'
+    assert_raise_with_message(ArgumentError, /duplicate member/, bug12291) {
+      @Struct.new(:a, :a)
+    }
   end
 
   class TopStruct < Test::Unit::TestCase

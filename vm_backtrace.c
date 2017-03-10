@@ -37,13 +37,12 @@ calc_lineno(const rb_iseq_t *iseq, const VALUE *pc)
 int
 rb_vm_get_sourceline(const rb_control_frame_t *cfp)
 {
-    int lineno = 0;
-    const rb_iseq_t *iseq = cfp->iseq;
-
-    if (RUBY_VM_NORMAL_ISEQ_P(iseq)) {
-	lineno = calc_lineno(cfp->iseq, cfp->pc);
+    if (VM_FRAME_RUBYFRAME_P(cfp) && cfp->iseq) {
+	return calc_lineno(cfp->iseq, cfp->pc);
     }
-    return lineno;
+    else {
+	return 0;
+    }
 }
 
 typedef struct rb_backtrace_location_struct {
@@ -1089,7 +1088,7 @@ static VALUE
 get_klass(const rb_control_frame_t *cfp)
 {
     VALUE klass;
-    if (rb_vm_control_frame_id_and_class(cfp, 0, &klass)) {
+    if (rb_vm_control_frame_id_and_class(cfp, 0, 0, &klass)) {
 	if (RB_TYPE_P(klass, T_ICLASS)) {
 	    return RBASIC(klass)->klass;
 	}
@@ -1174,7 +1173,7 @@ rb_debug_inspector_open(rb_debug_inspector_func_t func, void *data)
     rb_debug_inspector_t dbg_context;
     rb_thread_t *th = GET_THREAD();
     int state;
-    volatile VALUE UNINITIALIZED_VAR(result);
+    volatile VALUE MAYBE_UNUSED(result);
 
     dbg_context.th = th;
     dbg_context.cfp = dbg_context.th->cfp;
@@ -1191,7 +1190,7 @@ rb_debug_inspector_open(rb_debug_inspector_func_t func, void *data)
     /* invalidate bindings? */
 
     if (state) {
-	JUMP_TAG(state);
+	TH_JUMP_TAG(th, state);
     }
 
     return result;
@@ -1248,25 +1247,25 @@ rb_profile_frames(int start, int limit, VALUE *buff, int *lines)
     int i;
     rb_thread_t *th = GET_THREAD();
     rb_control_frame_t *cfp = th->cfp, *end_cfp = RUBY_VM_END_CONTROL_FRAME(th);
+    const rb_callable_method_entry_t *cme;
 
     for (i=0; i<limit && cfp != end_cfp;) {
-	const rb_callable_method_entry_t *cme = rb_vm_frame_method_entry(cfp);
-
-	if ((cme && cme->def->type == VM_METHOD_TYPE_ISEQ) || (cfp->iseq && cfp->pc)) {
+	if (cfp->iseq && cfp->pc) {
 	    if (start > 0) {
 		start--;
 		continue;
 	    }
 
 	    /* record frame info */
-	    if (cme) {
+	    cme = rb_vm_frame_method_entry(cfp);
+	    if (cme && cme->def->type == VM_METHOD_TYPE_ISEQ) {
 		buff[i] = (VALUE)cme;
 	    }
 	    else {
 		buff[i] = (VALUE)cfp->iseq;
 	    }
 
-	    if (cfp->iseq && lines) lines[i] = calc_lineno(cfp->iseq, cfp->pc);
+	    if (lines) lines[i] = calc_lineno(cfp->iseq, cfp->pc);
 
 	    i++;
 	}
@@ -1344,12 +1343,12 @@ frame2klass(VALUE frame)
 
     if (RB_TYPE_P(frame, T_IMEMO)) {
 	const rb_callable_method_entry_t *cme = (rb_callable_method_entry_t *)frame;
-	VM_ASSERT(imemo_type(frame) == imemo_ment);
-	return cme->defined_class;
+
+	if (imemo_type(frame) == imemo_ment) {
+	    return cme->defined_class;
+	}
     }
-    else {
-	return Qnil;
-    }
+    return Qnil;
 }
 
 VALUE

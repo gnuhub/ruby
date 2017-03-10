@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require_relative 'rexml_test_utils'
 
 require "rexml/document"
@@ -73,7 +74,7 @@ module REXMLTests
         assert_equal( expected, got.to_s )
       when Instruction
         assert_equal( expected, got.content )
-      when Fixnum
+      when Integer
         assert_equal( exected.to_f, got )
       when String
         # normalize values for comparison

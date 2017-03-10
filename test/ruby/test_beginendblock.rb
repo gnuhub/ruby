@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 
 class TestBeginEndBlock < Test::Unit::TestCase
@@ -128,5 +129,23 @@ at_exit { c.call }
 at_exit { callcc {|_c| c = _c } }
 EOS
     assert_normal_exit(script, bug9110)
+  end
+
+  def test_errinfo_at_exit
+    bug12302 = '[ruby-core:75038] [Bug #12302]'
+    assert_in_out_err([], <<-'end;', %w[2:exit 1:exit], [], bug12302)
+      at_exit do
+        puts "1:#{$!}"
+      end
+
+      at_exit do
+        puts "2:#{$!}"
+        raise 'x' rescue nil
+      end
+
+      at_exit do
+        exit
+      end
+    end;
   end
 end

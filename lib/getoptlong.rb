@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 #
 # GetoptLong for Ruby
 #
@@ -152,7 +153,7 @@ class GetoptLong
     #
     # Whether error messages are output to $stderr.
     #
-    @quiet = FALSE
+    @quiet = false
 
     #
     # Status code.
@@ -574,7 +575,7 @@ class GetoptLong
     else
       #
       # This is a non-option argument.
-      # Only RETURN_IN_ORDER falled into here.
+      # Only RETURN_IN_ORDER fell into here.
       #
       return '', argument
     end

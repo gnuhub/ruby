@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 
 class TestCall < Test::Unit::TestCase
@@ -64,5 +65,37 @@ class TestCall < Test::Unit::TestCase
 
     o.x&.at(proc.call)
     assert_equal(1, count)
+  end
+
+  def test_safe_call_block_command
+    assert_nil(("a".sub! "b" do end&.foo 1))
+  end
+
+  def test_safe_call_block_call
+    assert_nil(("a".sub! "b" do end&.foo))
+  end
+
+  def test_safe_call_block_call_brace
+    assert_nil(("a".sub! "b" do end&.foo {}))
+    assert_nil(("a".sub! "b" do end&.foo do end))
+  end
+
+  def test_safe_call_block_call_command
+    assert_nil(("a".sub! "b" do end&.foo 1 do end))
+  end
+
+  def test_invalid_safe_call
+    h = nil
+    assert_raise(NoMethodError) {
+      h[:foo] = nil
+    }
+  end
+
+  def test_call_splat_order
+    bug12860 = '[ruby-core:77701] [Bug# 12860]'
+    ary = [1, 2]
+    assert_equal([1, 2, 1], aaa(*ary, ary.shift), bug12860)
+    ary = [1, 2]
+    assert_equal([0, 1, 2, 1], aaa(0, *ary, ary.shift), bug12860)
   end
 end

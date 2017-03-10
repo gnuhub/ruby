@@ -65,14 +65,16 @@ rsock_init_unixsock(VALUE sock, VALUE path, int server)
     }
 
     if (status < 0) {
+	int e = errno;
 	close(fd);
-        rsock_sys_fail_path("connect(2)", path);
+	rsock_syserr_fail_path(e, "connect(2)", path);
     }
 
     if (server) {
 	if (listen(fd, SOMAXCONN) < 0) {
+	    int e = errno;
 	    close(fd);
-            rsock_sys_fail_path("listen(2)", path);
+	    rsock_syserr_fail_path(e, "listen(2)", path);
 	}
     }
 
@@ -90,6 +92,8 @@ rsock_init_unixsock(VALUE sock, VALUE path, int server)
  *   UNIXSocket.new(path) => unixsocket
  *
  * Creates a new UNIX client socket connected to _path_.
+ *
+ *   require 'socket'
  *
  *   s = UNIXSocket.new("/tmp/sock")
  *   s.send "hello", 0
@@ -201,6 +205,8 @@ sendmsg_blocking(void *data)
  *   p stdout.fileno #=> 6
  *
  *   stdout.puts "hello" # outputs "hello\n" to standard output.
+ *
+ * _io_ may be any kind of IO object or integer file descriptor.
  */
 static VALUE
 unix_send_io(VALUE sock, VALUE val)
@@ -297,6 +303,11 @@ recvmsg_blocking(void *data)
  *     }
  *   }
  *
+ * _klass_ will determine the class of _io_ returned (using the
+ * IO.for_fd singleton method or similar).
+ * If _klass_ is +nil+, an integer file descriptor is returned.
+ *
+ * _mode_ is the same as the argument passed to IO.for_fd
  */
 static VALUE
 unix_recv_io(int argc, VALUE *argv, VALUE sock)
@@ -413,7 +424,7 @@ unix_recv_io(int argc, VALUE *argv, VALUE sock)
 	ff_argc = mode == Qnil ? 1 : 2;
 	ff_argv[0] = INT2FIX(fd);
 	ff_argv[1] = mode;
-        return rb_funcall2(klass, for_fd, ff_argc, ff_argv);
+        return rb_funcallv(klass, for_fd, ff_argc, ff_argv);
     }
 }
 #else

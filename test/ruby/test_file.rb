@@ -1,6 +1,8 @@
+# frozen_string_literal: false
 require 'test/unit'
 require 'tempfile'
 require "thread"
+require "-test-/file"
 require_relative 'ut_eof'
 
 class TestFile < Test::Unit::TestCase
@@ -120,8 +122,8 @@ class TestFile < Test::Unit::TestCase
 
   def test_truncate_size
     Tempfile.create("test-truncate") do |f|
-      q1 = Queue.new
-      q2 = Queue.new
+      q1 = Thread::Queue.new
+      q2 = Thread::Queue.new
 
       th = Thread.new do
         data = ''
@@ -267,7 +269,11 @@ class TestFile < Test::Unit::TestCase
       realdir = File.realpath(tmpdir)
       open(File.join(tmpdir, tst), "w") {}
       a = File.join(tmpdir, "x")
-      File.symlink(tst, a)
+      begin
+        File.symlink(tst, a)
+      rescue Errno::EACCES, Errno::EPERM
+        skip "need privilege"
+      end
       assert_equal(File.join(realdir, tst), File.realpath(a))
       File.unlink(a)
 
@@ -353,6 +359,7 @@ class TestFile < Test::Unit::TestCase
       sleep 2
       File.write(path, "bar")
       sleep 2
+      File.read(path)
       File.chmod(0644, path)
       sleep 2
       File.read(path)
@@ -364,7 +371,7 @@ class TestFile < Test::Unit::TestCase
       if stat.birthtime != stat.ctime
         assert_in_delta t0+4, stat.ctime.to_f, delta
       end
-      unless /mswin|mingw/ =~ RUBY_PLATFORM
+      if /mswin|mingw/ !~ RUBY_PLATFORM && !Bug::File::Fs.noatime?(path)
         # Windows delays updating atime
         assert_in_delta t0+6, stat.atime.to_f, delta
       end

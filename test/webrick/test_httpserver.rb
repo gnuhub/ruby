@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require "test/unit"
 require "net/http"
 require "webrick"
@@ -10,6 +11,11 @@ class TestWEBrickHTTPServer < Test::Unit::TestCase
     self
   end
   NoLog = WEBrick::Log.new(empty_log, WEBrick::BasicLog::WARN)
+
+  def teardown
+    WEBrick::Utils::TimeoutHandler.terminate
+    super
+  end
 
   def test_mount
     httpd = WEBrick::HTTPServer.new(
@@ -359,7 +365,7 @@ class TestWEBrickHTTPServer < Test::Unit::TestCase
           http.request(req){|res| assert_equal("foo", res.body) }
         end
       rescue Timeout::Error
-        flunk('corrupted reponse')
+        flunk('corrupted response')
       end
     }
   end

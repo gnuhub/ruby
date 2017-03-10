@@ -1,5 +1,6 @@
 #!/usr/bin/env ruby -w
 # encoding: UTF-8
+# frozen_string_literal: false
 
 # tc_csv_parsing.rb
 #
@@ -206,6 +207,28 @@ class TestCSV::Parsing < TestCSV
   def test_field_size_limit_controls_lookahead
     assert_parse_errors_out( 'valid,fields,"' + BIG_DATA + '"',
                              field_size_limit: 2048 )
+  end
+
+  def test_field_size_limit_in_extended_column_not_exceeding
+    data = <<~DATA
+      "a","b"
+      "
+      2
+      ",""
+    DATA
+    assert_nothing_raised(CSV::MalformedCSVError) do
+      CSV.parse(data, field_size_limit: 4)
+    end
+  end
+
+  def test_field_size_limit_in_extended_column_exceeding
+    data = <<~DATA
+      "a","b"
+      "
+      2345
+      ",""
+    DATA
+    assert_parse_errors_out(data, field_size_limit: 5)
   end
 
   private

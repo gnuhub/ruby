@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 # HTTPGenericRequest is the parent of the HTTPRequest class.
 # Do not use this directly; use a subclass of HTTPRequest.
 #
@@ -320,7 +321,12 @@ class Net::HTTPGenericRequest
   end
 
   def write_header(sock, ver, path)
-    buf = "#{@method} #{path} HTTP/#{ver}\r\n"
+    reqline = "#{@method} #{path} HTTP/#{ver}"
+    if /[\r\n]/ =~ reqline
+      raise ArgumentError, "A Request-Line must not contain CR or LF"
+    end
+    buf = ""
+    buf << reqline << "\r\n"
     each_capitalized do |k,v|
       buf << "#{k}: #{v}\r\n"
     end

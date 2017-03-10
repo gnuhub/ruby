@@ -3,8 +3,10 @@
 exec "${RUBY-ruby}" "-x" "$0" "$@" && [ ] if false
 #!ruby
 # This needs ruby 1.9 and subversion.
-# run this in a repository to commit.
+# As a Ruby committer, run this in an SVN repository
+# to commit a change.
 
+require 'fileutils'
 require 'tempfile'
 
 $repos = 'svn+ssh://svn@ci.ruby-lang.org/ruby/'
@@ -47,7 +49,7 @@ def version
   open 'version.h', 'rb' do |f|
     f.each_line do |l|
       case l
-      when /^#define RUBY_VERSION "(\d)\.(\d)\.(\d)"$/
+      when /^#define RUBY_VERSION "(\d+)\.(\d+)\.(\d+)"$/
         v = $~.captures
       when /^#define RUBY_PATCHLEVEL (-?\d+)$/
         p = $1
@@ -60,7 +62,7 @@ end
 def interactive str, editfile = nil
   loop do
     yield
-    STDERR.puts "#{str} ([y]es|[a]bort|[r]etry#{'|[e]dit' if editfile})"
+    STDERR.puts "\e[1;33m#{str} ([y]es|[a]bort|[r]etry#{'|[e]dit' if editfile})\e[0m"
     case STDIN.gets
     when /\Aa/i then exit
     when /\Ar/i then redo
@@ -145,6 +147,8 @@ def tag intv_p = false, relname=nil
     end
   end
   system(*%w'svn cp -m', "add tag #{tagname}", branch_url, tag_url)
+  puts "run following command in git-svn working directory to push the tag into GitHub:"
+  puts "git tag #{tagname}  origin/tags/#{tagname} && git push ruby #{tagname}"
 end
 
 def default_merge_branch
@@ -165,12 +169,19 @@ when nil, "-h", "--help"
   exit
 else
   system 'svn up'
+  system 'ruby tool/file2lastrev.rb --revision.h . > revision.tmp'
+  system 'tool/ifchange "--timestamp=.revision.time" "revision.h" "revision.tmp"'
+  FileUtils.rm_f('revision.tmp')
 
-  if /--ticket=(.*)/ =~ ARGV[0]
-    tickets = $1.split(/,/).map{|num| " [Backport ##{num}]"}
+  case ARGV[0]
+  when /--ticket=(.*)/
+    tickets = $1.split(/,/).map{|num| " [Backport ##{num}]"}.join
     ARGV.shift
+  when /merge revision\(s\) ([\d,\-]+):( \[.*)/
+    tickets = $2
+    ARGV[0] = $1
   else
-    tickets = []
+    tickets = ''
   end
 
   q = $repos + (ARGV[1] || default_merge_branch)
@@ -235,7 +246,7 @@ else
 
   version_up
   f = Tempfile.new 'merger.rb'
-  f.printf "merge revision(s) %s:%s\n", revstr, tickets.join
+  f.printf "merge revision(s) %s:%s\n", revstr, tickets
   f.write log_svn
   f.flush
   f.close

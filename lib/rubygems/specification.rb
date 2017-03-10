@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# frozen_string_literal: true
 #--
 # Copyright 2006 by Chad Fowler, Rich Kilmer, Jim Weirich and others.
 # All rights reserved.
@@ -208,9 +209,9 @@ class Gem::Specification < Gem::BasicSpecification
   ##
   # Paths in the gem to add to <code>$LOAD_PATH</code> when this gem is
   # activated.
-  #
+  #--
   # See also #require_paths
-  #
+  #++
   # If you have an extension you do not need to add <code>"ext"</code> to the
   # require path, the extension build process will copy the extension files
   # into "lib" for you.
@@ -848,7 +849,7 @@ class Gem::Specification < Gem::BasicSpecification
       pattern = "#{name}-*.gemspec"
       stubs = default_stubs(pattern) + installed_stubs(dirs, pattern)
       stubs = uniq_by(stubs) { |stub| stub.full_name }.group_by(&:name)
-      stubs.each_value { |v| sort_by!(v) { |i| i.version } }
+      stubs.each_value { |v| _resort!(v) }
 
       @@stubs_by_name.merge! stubs
       @@stubs_by_name[name] ||= EMPTY
@@ -1073,7 +1074,7 @@ class Gem::Specification < Gem::BasicSpecification
   def self.find_in_unresolved_tree path
     specs = unresolved_deps.values.map { |dep| dep.to_specs }.flatten
 
-    specs.reverse_each do |spec|
+    specs.each do |spec|
       spec.traverse do |from_spec, dep, to_spec, trail|
         if to_spec.has_conflicts? || to_spec.conficts_when_loaded_with?(trail)
           :next
@@ -1191,6 +1192,7 @@ class Gem::Specification < Gem::BasicSpecification
   def self.normalize_yaml_input(input)
     result = input.respond_to?(:read) ? input.read : input
     result = "--- " + result unless result =~ /\A--- /
+    result = result.dup
     result.gsub!(/ !!null \n/, " \n")
     # date: 2011-04-26 00:00:00.000000000Z
     # date: 2011-04-26 00:00:00.000000000 Z
@@ -1682,6 +1684,8 @@ class Gem::Specification < Gem::BasicSpecification
         (conflicts[spec] ||= []) << dep
       end
     }
+    env_req = Gem.env_requirement(name)
+    (conflicts[self] ||= []) << env_req unless env_req.satisfied_by? version
     conflicts
   end
 
@@ -1699,6 +1703,7 @@ class Gem::Specification < Gem::BasicSpecification
   # Return true if there are possible conflicts against the currently loaded specs.
 
   def has_conflicts?
+    return true unless Gem.env_requirement(name).satisfied_by?(version)
     self.dependencies.any? { |dep|
       if dep.runtime? then
         spec = Gem.loaded_specs[dep.name]
@@ -2333,7 +2338,7 @@ class Gem::Specification < Gem::BasicSpecification
 
   def ruby_code(obj)
     case obj
-    when String            then obj.dump
+    when String            then obj.dump + ".freeze"
     when Array             then '[' + obj.map { |x| ruby_code x }.join(", ") + ']'
     when Hash              then
       seg = obj.keys.sort.map { |k| "#{k.to_s.dump} => #{obj[k].to_s.dump}" }
@@ -2523,14 +2528,14 @@ class Gem::Specification < Gem::BasicSpecification
       dependencies.each do |dep|
         req = dep.requirements_list.inspect
         dep.instance_variable_set :@type, :runtime if dep.type.nil? # HACK
-        result << "      s.add_#{dep.type}_dependency(%q<#{dep.name}>, #{req})"
+        result << "      s.add_#{dep.type}_dependency(%q<#{dep.name}>.freeze, #{req})"
       end
 
       result << "    else"
 
       dependencies.each do |dep|
         version_reqs_param = dep.requirements_list.inspect
-        result << "      s.add_dependency(%q<#{dep.name}>, #{version_reqs_param})"
+        result << "      s.add_dependency(%q<#{dep.name}>.freeze, #{version_reqs_param})"
       end
 
       result << '    end'
@@ -2538,7 +2543,7 @@ class Gem::Specification < Gem::BasicSpecification
       result << "  else"
       dependencies.each do |dep|
         version_reqs_param = dep.requirements_list.inspect
-        result << "    s.add_dependency(%q<#{dep.name}>, #{version_reqs_param})"
+        result << "    s.add_dependency(%q<#{dep.name}>.freeze, #{version_reqs_param})"
       end
       result << "  end"
     end
@@ -2608,7 +2613,7 @@ class Gem::Specification < Gem::BasicSpecification
     begin
       dependencies.each do |dep|
         next unless dep.runtime?
-        dep.to_specs.reverse_each do |dep_spec|
+        dep.to_specs.each do |dep_spec|
           next if visited.has_key?(dep_spec)
           visited[dep_spec] = true
           trail.push(dep_spec)
@@ -2691,9 +2696,9 @@ class Gem::Specification < Gem::BasicSpecification
             "#{full_name} contains itself (#{file_name}), check your files list"
     end
 
-    unless specification_version.is_a?(Fixnum)
+    unless specification_version.is_a?(Integer)
       raise Gem::InvalidSpecificationException,
-            'specification_version must be a Fixnum (did you mean version?)'
+            'specification_version must be an Integer (did you mean version?)'
     end
 
     case platform
@@ -2760,10 +2765,13 @@ class Gem::Specification < Gem::BasicSpecification
       end
 
       if !Gem::Licenses.match?(license)
-        warning <<-warning
-WARNING: license value '#{license}' is invalid.  Use a license identifier from
+        suggestions = Gem::Licenses.suggestions(license)
+        message = <<-warning
+license value '#{license}' is invalid.  Use a license identifier from
 http://spdx.org/licenses or '#{Gem::Licenses::NONSTANDARD}' for a nonstandard license.
         warning
+        message += "Did you mean #{suggestions.map { |s| "'#{s}'"}.join(', ')}?\n" unless suggestions.nil?
+        warning(message)
       end
     }
 

@@ -1,4 +1,5 @@
 # -*- coding: us-ascii -*-
+# frozen_string_literal: false
 require 'test/unit'
 
 class TestObject < Test::Unit::TestCase
@@ -18,12 +19,51 @@ class TestObject < Test::Unit::TestCase
   end
 
   def test_dup
-    assert_raise(TypeError) { 1.dup }
-    assert_raise(TypeError) { true.dup }
-    assert_raise(TypeError) { nil.dup }
+    assert_equal 1, 1.dup
+    assert_equal true, true.dup
+    assert_equal nil, nil.dup
+    assert_equal false, false.dup
+    x = :x; assert_equal x, x.dup
+    x = "bug13145".intern; assert_equal x, x.dup
+    x = 1 << 64; assert_equal x, x.dup
+    x = 1.72723e-77; assert_equal x, x.dup
 
     assert_raise(TypeError) do
       Object.new.instance_eval { initialize_copy(1) }
+    end
+  end
+
+  def test_clone
+    a = Object.new
+    def a.b; 2 end
+
+    a.freeze
+    c = a.clone
+    assert_equal(true, c.frozen?)
+    assert_equal(2, c.b)
+
+    assert_raise(ArgumentError) {a.clone(freeze: [])}
+    d = a.clone(freeze: false)
+    def d.e; 3; end
+    assert_equal(false, d.frozen?)
+    assert_equal(2, d.b)
+    assert_equal(3, d.e)
+
+    assert_equal 1, 1.clone
+    assert_equal true, true.clone
+    assert_equal nil, nil.clone
+    assert_equal false, false.clone
+    x = :x; assert_equal x, x.dup
+    x = "bug13145".intern; assert_equal x, x.dup
+    x = 1 << 64; assert_equal x, x.clone
+    x = 1.72723e-77; assert_equal x, x.clone
+    assert_raise(ArgumentError) {1.clone(freeze: false)}
+    assert_raise(ArgumentError) {true.clone(freeze: false)}
+    assert_raise(ArgumentError) {nil.clone(freeze: false)}
+    assert_raise(ArgumentError) {false.clone(freeze: false)}
+    x = EnvUtil.labeled_class("\u{1f4a9}").new
+    assert_raise_with_message(ArgumentError, /\u{1f4a9}/) do
+      Object.new.clone(freeze: x)
     end
   end
 
@@ -386,19 +426,15 @@ class TestObject < Test::Unit::TestCase
 
     m = "\u{30e1 30bd 30c3 30c9}"
     c = Class.new
-    EnvUtil.with_default_external(Encoding::UTF_8) do
-      assert_raise_with_message(NameError, /#{m}/) do
-        c.class_eval {remove_method m}
-      end
+    assert_raise_with_message(NameError, /#{m}/) do
+      c.class_eval {remove_method m}
     end
     c = Class.new {
       define_method(m) {}
       remove_method(m)
     }
-    EnvUtil.with_default_external(Encoding::UTF_8) do
-      assert_raise_with_message(NameError, /#{m}/) do
-        c.class_eval {remove_method m}
-      end
+    assert_raise_with_message(NameError, /#{m}/) do
+      c.class_eval {remove_method m}
     end
   end
 
@@ -755,6 +791,16 @@ class TestObject < Test::Unit::TestCase
       end
     EOS
     assert_match(/\bToS\u{3042}:/, x)
+
+    name = "X".freeze
+    x = Object.new.taint
+    class<<x;self;end.class_eval {define_method(:to_s) {name}}
+    assert_same(name, x.to_s)
+    assert_not_predicate(name, :tainted?)
+    assert_raise(RuntimeError) {name.taint}
+    assert_equal("X", [x].join(""))
+    assert_not_predicate(name, :tainted?)
+    assert_not_predicate(eval('"X".freeze'), :tainted?)
   end
 
   def test_inspect
@@ -833,7 +879,7 @@ class TestObject < Test::Unit::TestCase
         end
       end
 
-      assert_raise_with_message(#{exc}, "bug5473") {1.foo}
+      assert_raise_with_message(#{exc}, "bug5473", #{bug5473.dump}) {1.foo}
       SRC
     end
   end

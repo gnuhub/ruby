@@ -1,3 +1,4 @@
+# frozen_string_literal: true
 require 'test/unit'
 require 'find'
 require 'tmpdir'
@@ -8,6 +9,17 @@ class TestFind < Test::Unit::TestCase
       a = []
       Find.find(d) {|f| a << f }
       assert_equal([d], a)
+    }
+  end
+
+  def test_nonexistence
+    bug12087 = '[ruby-dev:49497] [Bug #12087]'
+    Dir.mktmpdir {|d|
+      path = "#{d}/a"
+      re = /#{Regexp.quote(path)}\z/
+      assert_raise_with_message(Errno::ENOENT, re, bug12087) {
+        Find.find(path) {}
+      }
     }
   end
 

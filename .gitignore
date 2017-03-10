@@ -3,10 +3,12 @@
 *-*-*.lib
 *.a
 *.bak
+*.bc
 *.dSYM
 *.dmyh
 *.dylib
 *.elc
+*.i
 *.inc
 *.log
 *.o
@@ -14,8 +16,10 @@
 *.orig
 *.pdb
 *.rej
+*.s
 *.sav
 *.swp
+*.yarb
 *~
 .*-*
 .*.list
@@ -28,6 +32,7 @@
 .svn
 Makefile
 Makefile.old
+cygruby*.def
 extconf.h
 y.output
 y.tab.c
@@ -101,7 +106,7 @@ y.tab.c
 /rubicon
 /ruby
 /ruby-runner
-/ruby-runner.c
+/ruby-runner.h
 /ruby-man.rd.gz
 /sizes.c
 /test.rb
@@ -121,7 +126,7 @@ y.tab.c
 /enc/*.def
 /enc/*.exp
 /enc/*.lib
-/enc/unicode/data
+/enc/unicode/data/*/*.txt
 
 # /enc/trans/
 /enc/trans/*.c
@@ -132,6 +137,8 @@ y.tab.c
 
 # /ext/
 /ext/extinit.c
+/ext/configure-ext.mk
+/ext/*/exts.mk
 
 # /ext/-test-/win32/dln/
 /ext/-test-/win32/dln/dlntest.exp
@@ -149,6 +156,7 @@ y.tab.c
 
 # /ext/rbconfig/
 /ext/rbconfig/sizeof/sizes.c
+/ext/rbconfig/sizeof/limits.c
 
 # /ext/ripper/
 /ext/ripper/eventids1.c
@@ -162,11 +170,9 @@ y.tab.c
 /ext/socket/constdefs.h
 /ext/socket/constdefs.c
 
-# /ext/tk/
-/ext/tk/config_list
-
 # /gems
 /gems/*.gem
+/gems/*-*
 
 # /spec/
 /spec/mspec

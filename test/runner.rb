@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'rbconfig'
 
 src_testdir = File.dirname(File.realpath(__FILE__))
@@ -22,6 +23,7 @@ ENV["GEM_SKIP"] = ENV["GEM_HOME"] = ENV["GEM_PATH"] = "".freeze
 require_relative 'lib/profile_test_all' if ENV.has_key?('RUBY_TEST_ALL_PROFILE')
 require_relative 'lib/tracepointchecker'
 require_relative 'lib/zombie_hunter'
+require_relative 'lib/iseq_loader_checker'
 
 if ENV['COVERAGE']
   %w[doclie simplecov-html simplecov].each do |f|

@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'minitest/autorun'
 require 'stringio'
 require 'tempfile'
@@ -91,7 +92,7 @@ module Psych
   end
 end
 
-# backport so that tests will run on 1.9 and 2.0.0
+# backport so that tests will run on 2.0.0
 unless Tempfile.respond_to? :create
   def Tempfile.create(basename, *rest)
     tmpfile = nil

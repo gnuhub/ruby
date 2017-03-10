@@ -1,4 +1,5 @@
 # coding: US-ASCII
+# frozen_string_literal: false
 require 'test/unit'
 require 'tmpdir'
 require 'tempfile'
@@ -1711,8 +1712,7 @@ EOT
         args.each {|arg| f.print arg }
       }
       content = File.read("t", :mode=>"rb:ascii-8bit")
-      assert_equal(expected.dup.force_encoding("ascii-8bit"),
-                   content.force_encoding("ascii-8bit"))
+      assert_equal(expected.b, content.b)
     }
   end
 
@@ -1892,7 +1892,7 @@ EOT
     with_tmpdir {
       src = "\u3042\r\n"
       generate_file("t.txt", src)
-      srcbin = src.dup.force_encoding("ascii-8bit")
+      srcbin = src.b
       open("t.txt", "rt:utf-8:euc-jp") {|f|
         f.binmode
         result = f.read
@@ -2082,6 +2082,54 @@ EOT
     }
   end
 
+  def test_bom_too_long_utfname
+    assert_separately([], <<-'end;') # do
+      assert_warn(/Unsupported encoding/) {
+        open(IO::NULL, "r:bom|utf-" + "x" * 10000) {}
+      }
+    end;
+    assert_separately([], <<-'end;') # do
+      assert_warn(/Unsupported encoding/) {
+        open(IO::NULL, encoding: "bom|utf-" + "x" * 10000) {}
+      }
+    end;
+  end
+
+  def test_bom_non_utf
+    enc = nil
+
+    assert_warn(/BOM/) {
+      open(__FILE__, "r:bom|us-ascii") {|f| enc = f.external_encoding}
+    }
+    assert_equal(Encoding::US_ASCII, enc)
+
+    enc = nil
+    assert_warn(/BOM/) {
+      open(__FILE__, "r", encoding: "bom|us-ascii") {|f| enc = f.external_encoding}
+    }
+    assert_equal(Encoding::US_ASCII, enc)
+
+    enc = nil
+    assert_warn(/BOM/) {
+      open(IO::NULL, "w:bom|us-ascii") {|f| enc = f.external_encoding}
+    }
+    assert_equal(Encoding::US_ASCII, enc)
+
+    enc = nil
+    assert_warn(/BOM/) {
+      open(IO::NULL, "w", encoding: "bom|us-ascii") {|f| enc = f.external_encoding}
+    }
+    assert_equal(Encoding::US_ASCII, enc)
+
+    tlhInganHol = "\u{f8e4 f8d9 f8d7 f8dc f8d0 f8db} \u{f8d6 f8dd f8d9}"
+    assert_warn(/#{tlhInganHol}/) {
+      EnvUtil.with_default_internal(nil) {
+        open(IO::NULL, "w:bom|#{tlhInganHol}") {|f| enc = f.external_encoding}
+      }
+    }
+    assert_nil(enc)
+  end
+
   def test_cbuf
     with_tmpdir {
       fn = "tst"
@@ -2189,7 +2237,7 @@ EOT
            w.binmode
            w.puts(0x010a.chr(Encoding::UTF_32BE))
            w.puts(0x010a.chr(Encoding::UTF_16BE))
-           w.puts(0x0a010000.chr(Encoding::UTF_32LE))
+           w.puts(0x0a01.chr(Encoding::UTF_32LE))
            w.puts(0x0a01.chr(Encoding::UTF_16LE))
            w.close
          end,
@@ -2197,7 +2245,7 @@ EOT
            r.binmode
            assert_equal("\x00\x00\x01\x0a\n", r.read(5), bug)
            assert_equal("\x01\x0a\n", r.read(3), bug)
-           assert_equal("\x00\x00\x01\x0a\n", r.read(5), bug)
+           assert_equal("\x01\x0a\x00\x00\n", r.read(5), bug)
            assert_equal("\x01\x0a\n", r.read(3), bug)
            assert_equal("", r.read, bug)
            r.close
@@ -2591,7 +2639,7 @@ EOT
         begin
           assert_in_out_err(args, "", out, err,
                             "#{bug11444}: #{test} in #{mode} mode",
-                            timeout: 1)
+                            timeout: 10)
         rescue Exception => e
           failure << e
         end

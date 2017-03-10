@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 
 class TestGc < Test::Unit::TestCase
@@ -125,7 +126,7 @@ class TestGc < Test::Unit::TestCase
   def test_latest_gc_info
     assert_separately %w[--disable-gem], __FILE__, __LINE__, <<-'eom'
     GC.start
-    count = GC.stat(:heap_free_slots) + GC.stat(:heap_allocatable_pages) * GC::INTERNAL_CONSTANTS[:HEAP_OBJ_LIMIT]
+    count = GC.stat(:heap_free_slots) + GC.stat(:heap_allocatable_pages) * GC::INTERNAL_CONSTANTS[:HEAP_PAGE_OBJ_LIMIT]
     count.times{ "a" + "b" }
     assert_equal :newobj, GC.latest_gc_info[:gc_by]
     eom
@@ -289,7 +290,7 @@ class TestGc < Test::Unit::TestCase
     base_length = GC.stat[:heap_eden_pages]
     (base_length * 500).times{ 'a' }
     GC.start
-    assert_in_delta base_length, (v = GC.stat[:heap_eden_pages]), 1,
+    assert_in_delta base_length, (v = GC.stat[:heap_eden_pages]), 2,
            "invalid heap expanding (base_length: #{base_length}, GC.stat[:heap_eden_pages]: #{v})"
 
     a = []
@@ -300,7 +301,7 @@ class TestGc < Test::Unit::TestCase
   end
 
   def test_gc_internals
-    assert_not_nil GC::INTERNAL_CONSTANTS[:HEAP_OBJ_LIMIT]
+    assert_not_nil GC::INTERNAL_CONSTANTS[:HEAP_PAGE_OBJ_LIMIT]
     assert_not_nil GC::INTERNAL_CONSTANTS[:RVALUE_SIZE]
   end
 
@@ -341,13 +342,6 @@ class TestGc < Test::Unit::TestCase
           sleep 0.1
           Process.kill("INT", pid) rescue break
         }
-        if RUBY_PLATFORM.include?('solaris')
-          $stderr.puts `/usr/bin/psig #{$$}`
-          $stderr.puts `/usr/bin/psig #{Process.ppid}`
-        elsif File.exist?('/proc/self/status')
-          $stderr.puts IO.read('/proc/self/status')
-          $stderr.puts IO.read("/proc/#{Process.ppid}/status")
-        end
       end
       f = proc {1000.times {}}
       loop do
@@ -394,6 +388,13 @@ class TestGc < Test::Unit::TestCase
       assert_equal 1, GC.count - c
     ensure
       GC.enable unless disabled
+    end
+  end
+
+  def test_vm_object
+    assert_normal_exit <<-'end', '[Bug #12583]'
+      ObjectSpace.each_object{|o| o.singleton_class rescue 0}
+      ObjectSpace.each_object{|o| case o when Module then o.instance_methods end}
     end
   end
 end

@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'rexml/functions'
 require 'rexml/xmltokens'
 
@@ -193,7 +194,7 @@ module REXML
         case res
         when true
           results << element
-        when Fixnum
+        when Integer
           results << element if Functions.pair[0] == res
         when String
           results << element
@@ -229,7 +230,7 @@ module REXML
         case res
         when true
           results << element
-        when Fixnum
+        when Integer
           results << element if Functions.pair[0] == res
         end
       end

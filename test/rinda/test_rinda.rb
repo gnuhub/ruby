@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 
 require 'drb/drb'
@@ -551,6 +552,26 @@ module RingIPv6
     end
     skip 'IPv6 not available'
   end
+
+  def ipv6_mc(rf, hops = nil)
+    ifaddr = prepare_ipv6(rf)
+    rf.multicast_hops = hops if hops
+    begin
+      v6mc = rf.make_socket("ff02::1")
+    rescue Errno::EINVAL
+      # somehow Debian 6.0.7 needs ifname
+      v6mc = rf.make_socket("ff02::1%#{ifaddr.name}")
+    rescue Errno::EADDRNOTAVAIL
+      return # IPv6 address for multicast not available
+    rescue Errno::ENETDOWN
+      return # Network is down
+    end
+    begin
+      yield v6mc
+    ensure
+      v6mc.close
+    end
+  end
 end
 
 class TestRingServer < Test::Unit::TestCase
@@ -622,12 +643,23 @@ class TestRingServer < Test::Unit::TestCase
   end
 
   def test_make_socket_ipv4_multicast
-    v4mc = @rs.make_socket('239.0.0.1')
+    begin
+      v4mc = @rs.make_socket('239.0.0.1')
+    rescue Errno::ENOBUFS => e
+      skip "Missing multicast support in OS: #{e.message}"
+    end
 
-    if Socket.const_defined?(:SO_REUSEPORT) then
-      assert(v4mc.getsockopt(:SOCKET, :SO_REUSEPORT).bool)
-    else
-      assert(v4mc.getsockopt(:SOCKET, :SO_REUSEADDR).bool)
+    begin
+      if Socket.const_defined?(:SO_REUSEPORT) then
+        assert(v4mc.getsockopt(:SOCKET, :SO_REUSEPORT).bool)
+      else
+        assert(v4mc.getsockopt(:SOCKET, :SO_REUSEADDR).bool)
+      end
+    rescue TypeError
+      if /aix/ =~ RUBY_PLATFORM
+        skip "Known bug in getsockopt(2) on AIX"
+      end
+      raise $!
     end
 
     assert_equal('0.0.0.0', v4mc.local_address.ip_address)
@@ -642,6 +674,8 @@ class TestRingServer < Test::Unit::TestCase
       v6mc = @rs.make_socket('ff02::1')
     rescue Errno::EADDRNOTAVAIL
       return # IPv6 address for multicast not available
+    rescue Errno::ENOBUFS => e
+      skip "Missing multicast support in OS: #{e.message}"
     end
 
     if Socket.const_defined?(:SO_REUSEPORT) then
@@ -656,13 +690,25 @@ class TestRingServer < Test::Unit::TestCase
 
   def test_ring_server_ipv4_multicast
     @rs.shutdown
-    @rs = Rinda::RingServer.new(@ts, [['239.0.0.1', '0.0.0.0']], @port)
+    begin
+      @rs = Rinda::RingServer.new(@ts, [['239.0.0.1', '0.0.0.0']], @port)
+    rescue Errno::ENOBUFS => e
+      skip "Missing multicast support in OS: #{e.message}"
+    end
+
     v4mc = @rs.instance_variable_get('@sockets').first
 
-    if Socket.const_defined?(:SO_REUSEPORT) then
-      assert(v4mc.getsockopt(:SOCKET, :SO_REUSEPORT).bool)
-    else
-      assert(v4mc.getsockopt(:SOCKET, :SO_REUSEADDR).bool)
+    begin
+      if Socket.const_defined?(:SO_REUSEPORT) then
+        assert(v4mc.getsockopt(:SOCKET, :SO_REUSEPORT).bool)
+      else
+        assert(v4mc.getsockopt(:SOCKET, :SO_REUSEADDR).bool)
+      end
+    rescue TypeError
+      if /aix/ =~ RUBY_PLATFORM
+        skip "Known bug in getsockopt(2) on AIX"
+      end
+      raise $!
     end
 
     assert_equal('0.0.0.0', v4mc.local_address.ip_address)
@@ -754,6 +800,11 @@ class TestRingFinger < Test::Unit::TestCase
     v4 = @rf.make_socket('127.0.0.1')
 
     assert(v4.getsockopt(:SOL_SOCKET, :SO_BROADCAST).bool)
+  rescue TypeError
+    if /aix/ =~ RUBY_PLATFORM
+      skip "Known bug in getsockopt(2) on AIX"
+    end
+    raise $!
   ensure
     v4.close if v4
   end
@@ -768,18 +819,10 @@ class TestRingFinger < Test::Unit::TestCase
   end
 
   def test_make_socket_ipv6_multicast
-    ifaddr = prepare_ipv6(@rf)
-    begin
-      v6mc = @rf.make_socket("ff02::1")
-    rescue Errno::EINVAL
-      # somehow Debian 6.0.7 needs ifname
-      v6mc = @rf.make_socket("ff02::1%#{ifaddr.name}")
+    ipv6_mc(@rf) do |v6mc|
+      assert_equal(1, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_LOOP).int)
+      assert_equal(1, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_HOPS).int)
     end
-
-    assert_equal(1, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_LOOP).int)
-    assert_equal(1, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_HOPS).int)
-  ensure
-    v6mc.close if v6mc
   end
 
   def test_make_socket_ipv4_multicast_hops
@@ -791,17 +834,9 @@ class TestRingFinger < Test::Unit::TestCase
   end
 
   def test_make_socket_ipv6_multicast_hops
-    ifaddr = prepare_ipv6(@rf)
-    @rf.multicast_hops = 2
-    begin
-      v6mc = @rf.make_socket("ff02::1")
-    rescue Errno::EINVAL
-      # somehow Debian 6.0.7 needs ifname
-      v6mc = @rf.make_socket("ff02::1%#{ifaddr.name}")
+    ipv6_mc(@rf, 2) do |v6mc|
+      assert_equal(2, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_HOPS).int)
     end
-    assert_equal(2, v6mc.getsockopt(:IPPROTO_IPV6, :IPV6_MULTICAST_HOPS).int)
-  ensure
-    v6mc.close if v6mc
   end
 
 end

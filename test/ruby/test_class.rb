@@ -1,3 +1,4 @@
+# frozen_string_literal: false
 require 'test/unit'
 
 class TestClass < Test::Unit::TestCase
@@ -45,9 +46,9 @@ class TestClass < Test::Unit::TestCase
     assert_same(Class, c.class)
     assert_same(Object, c.superclass)
 
-    c = Class.new(Fixnum)
+    c = Class.new(Integer)
     assert_same(Class, c.class)
-    assert_same(Fixnum, c.superclass)
+    assert_same(Integer, c.superclass)
   end
 
   def test_00_new_basic
@@ -370,8 +371,30 @@ class TestClass < Test::Unit::TestCase
       end;
     }
     assert_raise_with_message(TypeError, /#{n}/) {
+      Class.new(c)
+    }
+    assert_raise_with_message(TypeError, /#{n}/) {
       m.module_eval "class #{n} < Class.new; end"
     }
+  end
+
+  define_method :test_invalid_reset_superclass do
+    class A; end
+    class SuperclassCannotBeReset < A
+    end
+    assert_equal A, SuperclassCannotBeReset.superclass
+
+    assert_raise_with_message(TypeError, /superclass mismatch/) {
+      class SuperclassCannotBeReset < String
+      end
+    }
+
+    assert_raise_with_message(TypeError, /superclass mismatch/, "[ruby-core:75446]") {
+      class SuperclassCannotBeReset < Object
+      end
+    }
+
+    assert_equal A, SuperclassCannotBeReset.superclass
   end
 
   def test_cloned_singleton_method_added
@@ -536,6 +559,14 @@ class TestClass < Test::Unit::TestCase
     }
   end
 
+  def test_namescope_error_message
+    m = Module.new
+    o = m.module_eval "class A\u{3042}; self; end.new"
+    assert_raise_with_message(TypeError, /A\u{3042}/) {
+      o::Foo
+    }
+  end
+
   def test_redefinition_mismatch
     m = Module.new
     m.module_eval "A = 1"
@@ -554,5 +585,25 @@ class TestClass < Test::Unit::TestCase
         require 'date'
       }
     end;
+  end
+
+  def test_should_not_expose_singleton_class_without_metaclass
+    assert_normal_exit %q{
+      klass = Class.new(Array)
+      # The metaclass of +klass+ should handle #bla since it should inherit methods from meta:meta:Array
+      def (Array.singleton_class).bla; :bla; end
+      hidden = ObjectSpace.each_object(Class).find { |c| klass.is_a? c and c.inspect.include? klass.inspect }
+      raise unless hidden.nil?
+    }, '[Bug #11740]'
+
+    assert_normal_exit %q{
+      klass = Class.new(Array)
+      klass.singleton_class
+      # The metaclass of +klass+ should handle #bla since it should inherit methods from meta:meta:Array
+      def (Array.singleton_class).bla; :bla; end
+      hidden = ObjectSpace.each_object(Class).find { |c| klass.is_a? c and c.inspect.include? klass.inspect }
+      raise if hidden.nil?
+    }, '[Bug #11740]'
+
   end
 end
